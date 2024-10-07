@@ -36,13 +36,42 @@ class BaseAlgorithm:
         self.pp_meas_indices = None
 
     def check_observability(self, eppci: ExtendedPPCI, z):
-        # Check if observability criterion is fulfilled and the state estimation is possible
+        # Check if minimum number of measurements is available and the state estimation is possible
         if len(z) < 2 * eppci["bus"].shape[0] - 1:
             self.logger.error("System is not observable (cancelling)")
             self.logger.error("Measurements available: %d. Measurements required: %d" %
                               (len(z), 2 * eppci["bus"].shape[0] - 1))
             raise UserWarning("Measurements available: %d. Measurements required: %d" %
                               (len(z), 2 * eppci["bus"].shape[0] - 1))
+        # Check observability 
+        # self.observability_analysis(eppci, z)
+
+    def observability_analysis(self, eppci, z):
+        E = eppci.E
+        n = len(E)
+        m = len(z)
+        sem = BaseAlgebra(eppci)
+        W = np.identity(n)
+        U = np.zeros(n)
+        H = csr_matrix(sem.create_hx_jacobian(E))
+        V = []
+        S = np.empty([0,n])
+        for i in range(m):
+            h = H.getrow(i)
+            t = h*W
+            val = np.logical_and(t!=0,U==0)
+            idx = np.where(val)[1]
+            if idx.size > 0:
+                p = idx[0]
+                U[p]=i+1
+                W[:,p] /= t[0,p]
+                t[0,p] = 0
+                W -= np.outer(W[:,p],t[0])
+            else:
+                V.append(i)
+                S = np.vstack((S,t))
+        N = W[:,U==0]
+        # print(N)
 
     def check_result(self, current_error, cur_it):
         # print output for results
