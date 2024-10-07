@@ -5416,10 +5416,10 @@ def create_measurement(net, meas_type, element_type, value, std_dev, element, si
                        check_existing=True, index=None, name=None, **kwargs):
     """
     Creates a measurement, which is used by the estimation module. Possible types of measurements
-    are: v, p, q, i, va, ia
+    are: v, p, q, i, va, ia, s
 
     INPUT:
-        **meas_type** (string) - Type of measurement. "v", "p", "q", "i", "va", "ia" are possible
+        **meas_type** (string) - Type of measurement. "v", "p", "q", "i", "va", "ia", "s" are possible
 
         **element_type** (string) - Clarifies which element is measured. "bus", "line",
         "trafo", and "trafo3w" are possible
@@ -5459,7 +5459,7 @@ def create_measurement(net, meas_type, element_type, value, std_dev, element, si
         4.5 MVar line measurement with 0.1 MVar standard deviation on the "to_bus" side of line 2
         create_measurement(net, "q", "line", 2, 4.5, 0.1, "to")
     """
-    if meas_type not in ("v", "p", "q", "i", "va", "ia"):
+    if meas_type not in ("v", "p", "q", "i", "va", "ia", "s"):
         raise UserWarning("Invalid measurement type ({})".format(meas_type))
 
     if side is None and element_type in ("line", "trafo"):

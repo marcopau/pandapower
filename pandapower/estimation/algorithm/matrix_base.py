@@ -8,7 +8,7 @@ from scipy.sparse import vstack, hstack
 
 from pandapower.pypower.idx_brch import F_BUS, T_BUS
 from pandapower.pypower.dSbus_dV import dSbus_dV
-from pandapower.pypower.dSbr_dV import dSbr_dV
+from pandapower.pypower.dSbr_dV import dSbr_dV, dSm_dV
 from pandapower.pypower.dIbr_dV import dIbr_dV_new
 
 from pandapower.estimation.ppc_conversion import ExtendedPPCI
@@ -64,20 +64,28 @@ class BaseAlgebra:
                    np.imag(Ste),
                    np.abs(V)]
 
-        if self.any_i_meas or self.any_degree_meas:
-            va = np.angle(V)
-            Ife = self.Yf * V
-            ifem = np.abs(Ife)
-            ifea = np.angle(Ife)
-            Ite = self.Yt * V
-            item = np.abs(Ite)
-            itea = np.angle(Ite)
-            hx = np.r_[hx,
-                       va,
-                       ifem,
-                       item,
-                       ifea,
-                       itea]
+        # if self.any_i_meas or self.any_degree_meas:
+        va = np.angle(V)
+        Ife = self.Yf * V
+        ifem = np.abs(Ife)
+        ifea = np.angle(Ife)
+        Ite = self.Yt * V
+        item = np.abs(Ite)
+        itea = np.angle(Ite)
+        hx = np.r_[hx,
+                    va,
+                    ifem,
+                    item,
+                    ifea,
+                    itea]
+
+        # apparent power measurements
+        Sfme = np.abs(Sfe)
+        Sfte = np.abs(Ste)
+        hx = np.r_[hx,
+                    Sfme,
+                    Sfte]
+
         return hx[self.non_nan_meas_selector]
 
     def create_hx_jacobian(self, E):
@@ -106,27 +114,38 @@ class BaseAlgebra:
         jac = np.r_[s_jac,
                     vm_jac]
 
-        if self.any_i_meas or self.any_degree_meas:
-            dva_dth, dva_dv = self._dvabus_dV(V)
-            va_jac = np.c_[dva_dth, dva_dv]
-            difm_dth, difm_dv, ditm_dth, ditm_dv,\
-                difa_dth, difa_dv, dita_dth, dita_dv = self._dimiabr_dV(V)
-            im_jac_th = np.r_[difm_dth,
-                              ditm_dth]
-            im_jac_v = np.r_[difm_dv,
-                             ditm_dv]
-            ia_jac_th = np.r_[difa_dth,
-                              dita_dth]
-            ia_jac_v = np.r_[difa_dv,
-                             dita_dv]
+        # if self.any_i_meas or self.any_degree_meas:
+        dva_dth, dva_dv = self._dvabus_dV(V)
+        va_jac = np.c_[dva_dth, dva_dv]
+        difm_dth, difm_dv, ditm_dth, ditm_dv,\
+            difa_dth, difa_dv, dita_dth, dita_dv = self._dimiabr_dV(V)
+        im_jac_th = np.r_[difm_dth,
+                            ditm_dth]
+        im_jac_v = np.r_[difm_dv,
+                            ditm_dv]
+        ia_jac_th = np.r_[difa_dth,
+                            dita_dth]
+        ia_jac_v = np.r_[difa_dv,
+                            dita_dv]
 
-            im_jac = np.c_[im_jac_th, im_jac_v]
-            ia_jac = np.c_[ia_jac_th, ia_jac_v]
+        im_jac = np.c_[im_jac_th, im_jac_v]
+        ia_jac = np.c_[ia_jac_th, ia_jac_v]
 
-            jac = np.r_[jac,
-                        va_jac,
-                        im_jac,
-                        ia_jac]
+        jac = np.r_[jac,
+                    va_jac,
+                    im_jac,
+                    ia_jac]
+
+        # Apparent power measurements
+        dSfm_dth, dSfm_dv, dStm_dth, dStm_dv = self._dSm_dV(V)
+        sm_jac_th = np.r_[dSfm_dth,
+                            dStm_dth]
+        sm_jac_v = np.r_[dSfm_dv,
+                            dStm_dv]
+        sm_jac = np.c_[sm_jac_th, sm_jac_v]
+
+        jac = np.r_[jac, 
+                    sm_jac] 
 
         return jac[self.non_nan_meas_selector, :][:, self.delta_v_bus_selector]
 
@@ -165,6 +184,10 @@ class BaseAlgebra:
         # dita_dv = (np.angle(1e-5 * dit_dv + It.reshape((-1, 1))) - np.angle(It.reshape((-1, 1))))/1e-5
         return difm_dth, difm_dv, ditm_dth, ditm_dv, difa_dth, difa_dv, dita_dth, dita_dv
 
+    def _dSm_dV(self, V):
+        dSf_dth, dSf_dv, dSt_dth, dSt_dv = dSm_dV(self.eppci['branch'], self.Yf, self.Yt, V)
+        dSf_dth, dSf_dv, dSt_dth, dSt_dv = map(lambda m: m.toarray(), (dSf_dth, dSf_dv, dSt_dth, dSt_dv))
+        return dSf_dth, dSf_dv, dSt_dth, dSt_dv
 
 class BaseAlgebraZeroInjConstraints(BaseAlgebra):
     def create_cx(self, E, p_zero_inj, q_zero_inj):

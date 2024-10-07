@@ -29,6 +29,12 @@ IA_TO = 20
 IA_TO_STD = 21
 IA_FROM_IDX = 22
 IA_TO_IDX = 23
+S_FROM = 24
+S_FROM_IDX = 25
+S_FROM_STD = 26
+S_TO = 27
+S_TO_IDX = 28
+S_TO_STD = 29
 
 
-branch_cols_se = 24
+branch_cols_se = 30

@@ -129,3 +129,52 @@ def dSbr_dV(branch, Yf, Yt, V):
     St = V[t] * conj(It)
 
     return dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm, Sf, St
+
+
+def dSm_dV(branch, Yf, Yt, V):
+
+    # define
+    f = branch[:, F_BUS].real.astype(int64)       ## list of "from" buses
+    t = branch[:, T_BUS].real.astype(int64)       ## list of "to" buses
+    nl = len(f)
+    nb = len(V)
+    il = arange(nl)
+    ib = arange(nb)
+    ## compute currents
+    If = Yf * V
+    It = Yt * V
+    # Compute power flow vectors.
+    Sf = V[f] * conj(If)
+    St = V[t] * conj(It)
+
+    diagV = sparse((V, (ib, ib)))
+    diagVnorm = sparse((V / abs(V), (ib, ib)))
+    idxf = Sf == 0
+    idxt = St == 0
+    diagSfnorm = sparse((Sf / abs(Sf), (il, il)))
+    diagStnorm = sparse((St / abs(St), (il, il)))
+    diagSfnorm[idxf,idxf] = 0
+    diagStnorm[idxt,idxt] = 0
+    diagVf = sparse((V[f], (il, il)))
+    diagVt = sparse((V[t], (il, il)))
+    Yf1 = Yf.copy()
+    Yf1[il,t] = 0
+    Yt1 = Yt.copy()
+    Yt1[il,f] = 0
+
+    af1 = conj(diagSfnorm) * diagVf * conj(Yf * diagVnorm)
+    af2 = conj(diagSfnorm * Yf1) * diagV * conj(diagVnorm)
+    af3 = conj(diagVt * diagSfnorm * Yf1) * diagVnorm
+    at1 = conj(diagStnorm) * diagVt * conj(Yt * diagVnorm)
+    at2 = conj(diagStnorm * Yt1) * diagV * conj(diagVnorm)
+    at3 = conj(diagVf * diagStnorm * Yt1) * diagVnorm
+
+    bf = diagVf * conj(diagVt * diagSfnorm * Yf) 
+    bt = diagVt * conj(diagVf * diagStnorm * Yt)
+
+    dSf_dVm = af1.real + af2.real - af3.real
+    dSt_dVm = at1.real + at2.real - at3.real
+    dSf_dVa = bf.imag
+    dSt_dVa = bt.imag
+
+    return dSf_dVa, dSf_dVm, dSt_dVa, dSt_dVm

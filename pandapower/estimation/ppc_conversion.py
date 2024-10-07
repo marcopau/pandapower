@@ -31,6 +31,8 @@ from pandapower.estimation.idx_brch import (P_FROM, P_FROM_IDX, P_FROM_STD,
                                             Q_TO, Q_TO_IDX, Q_TO_STD,
                                             IM_TO, IM_TO_IDX, IM_TO_STD,
                                             IA_TO, IA_TO_IDX, IA_TO_STD,
+                                            S_FROM, S_FROM_IDX, S_FROM_STD,
+                                            S_TO, S_TO_IDX, S_TO_STD,
                                             branch_cols_se)
 
 try:
@@ -50,7 +52,9 @@ BR_MEAS_PPCI_IX = {("p", "f"): {"VALUE": P_FROM, "IDX": P_FROM_IDX, "STD": P_FRO
                    ("p", "t"): {"VALUE": P_TO, "IDX": P_TO_IDX, "STD": P_TO_STD},
                    ("q", "t"): {"VALUE": Q_TO, "IDX": Q_TO_IDX, "STD": Q_TO_STD},
                    ("i", "t"): {"VALUE": IM_TO, "IDX": IM_TO_IDX, "STD": IM_TO_STD},
-                   ("ia", "t"): {"VALUE": IA_TO, "IDX": IA_TO_IDX, "STD": IA_TO_STD}}
+                   ("ia", "t"): {"VALUE": IA_TO, "IDX": IA_TO_IDX, "STD": IA_TO_STD},
+                   ("s", "f"): {"VALUE": S_FROM, "IDX": S_FROM_IDX, "STD": S_FROM_STD},
+                   ("s", "t"): {"VALUE": S_TO, "IDX": S_TO_IDX, "STD": S_TO_STD}}
 BUS_MEAS_PPCI_IX = {"v": {"VALUE": VM, "IDX": VM_IDX, "STD": VM_STD},
                     "va": {"VALUE": VA, "IDX": VA_IDX, "STD": VA_STD},
                     "p": {"VALUE": P, "IDX": P_IDX, "STD": P_STD},
@@ -111,6 +115,7 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     # convert p, q, i measurement to p.u., u already in p.u.
     meas.loc[meas.measurement_type == "p", ["value", "std_dev"]] /= ppci["baseMVA"]
     meas.loc[meas.measurement_type == "q", ["value", "std_dev"]] /= ppci["baseMVA"]
+    meas.loc[meas.measurement_type == "s", ["value", "std_dev"]] /= ppci["baseMVA"]
 
     if not meas.query("measurement_type=='i'").empty:
         meas_i_mask = (meas.measurement_type == 'i')
@@ -204,8 +209,9 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     bus_append[new_in_line_buses, 4] = 0.
     bus_append[new_in_line_buses, 5] = 1.
 
-    # add 15 columns to mpc[branch] for Im_from, Im_from std dev, Im_to, Im_to std dev,
+    # add 30 columns to mpc[branch] for Im_from, Im_from std dev, Im_to, Im_to std dev,
     # P_from, P_from std dev, P_to, P_to std dev, Q_from, Q_from std dev,  Q_to, Q_to std dev,
+    # S_from, S_from std dev, S_to, S_to std dev
     # pandapower measurement index I, P, Q
     branch_append = np.full((ppci["branch"].shape[0], branch_cols_se),
                             np.nan, dtype=ppci["branch"].dtype)
@@ -214,7 +220,7 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     for br_type,  br_map in (("line", map_line), ("trafo", map_trafo)):
         if br_map is None:
             continue
-        for meas_type in ("p", "q", "i", "ia"):
+        for meas_type in ("p", "q", "i", "ia", "s"):
             this_meas = meas[(meas.measurement_type == meas_type) &
                              (meas.element_type == br_type) &
                               meas.element.isin(br_map.index)]
@@ -236,7 +242,7 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
 
     # Add measurements for trafo3w
     if map_trafo3w is not None:
-        for meas_type in ("p", "q", "i", "ia"):
+        for meas_type in ("p", "q", "i", "ia", "s"):
             this_trafo3w_meas = meas[(meas.measurement_type == meas_type) &
                                      (meas.element_type == "trafo3w") &
                                       meas.element.isin(map_trafo3w)]
@@ -331,6 +337,8 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
     i_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IM_TO])
     i_degree_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IA_FROM])
     i_degree_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IA_TO])
+    s_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + S_FROM])
+    s_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + S_TO])
     # piece together our measurement vector z
     z = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P],
                         ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM],
@@ -343,7 +351,9 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                         ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM],
                         ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO],
                         ppci["branch"][i_degree_line_f_not_nan, branch_cols + IA_FROM],
-                        ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO]
+                        ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO],
+                        ppci["branch"][s_line_f_not_nan, branch_cols + S_FROM],
+                        ppci["branch"][s_line_t_not_nan, branch_cols + S_TO]
                         )).real.astype(np.float64)
     imag_meas = np.concatenate((np.zeros(sum(p_bus_not_nan)),
                                np.zeros(sum(p_line_f_not_nan)),
@@ -356,7 +366,9 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                np.ones(sum(i_line_f_not_nan)),
                                np.ones(sum(i_line_t_not_nan)),
                                np.zeros(sum(i_degree_line_f_not_nan)),
-                               np.zeros(sum(i_degree_line_t_not_nan))
+                               np.zeros(sum(i_degree_line_t_not_nan)),
+                               np.zeros(sum(s_line_f_not_nan)),
+                               np.zeros(sum(s_line_t_not_nan))
                                )).astype(bool)
     idx_non_imeas = np.flatnonzero(~imag_meas)
     
@@ -373,7 +385,9 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                           ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM_IDX],
                                           ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO_IDX],
                                           ppci["branch"][i_degree_line_f_not_nan, branch_cols + IA_FROM_IDX],
-                                          ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO_IDX]
+                                          ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO_IDX],
+                                          ppci["branch"][s_line_f_not_nan, branch_cols + S_FROM_IDX],
+                                          ppci["branch"][s_line_t_not_nan, branch_cols + S_TO_IDX]
                                           )).real.astype(np.int64)
         # Covariance matrix R
         r_cov = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_STD],
@@ -387,7 +401,9 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                 ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM_STD],
                                 ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO_STD],
                                 ppci["branch"][i_degree_line_f_not_nan, branch_cols + IA_FROM_STD],
-                                ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO_STD]
+                                ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO_STD],
+                                ppci["branch"][s_line_f_not_nan, branch_cols + S_FROM_STD],
+                                ppci["branch"][s_line_t_not_nan, branch_cols + S_TO_STD]
                                 )).real.astype(np.float64)
         meas_mask = np.concatenate([p_bus_not_nan,
                                     p_line_f_not_nan,
@@ -400,7 +416,9 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                     i_line_f_not_nan,
                                     i_line_t_not_nan,
                                     i_degree_line_f_not_nan,
-                                    i_degree_line_t_not_nan])
+                                    i_degree_line_t_not_nan,
+                                    s_line_f_not_nan,
+                                    s_line_t_not_nan])
         any_i_meas = np.any(np.r_[i_line_f_not_nan, i_line_t_not_nan])
         any_degree_meas = np.any(np.r_[v_degree_bus_not_nan,
                                        i_degree_line_f_not_nan,
