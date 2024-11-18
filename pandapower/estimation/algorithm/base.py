@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
+from copy import deepcopy
 
 # Copyright (c) 2016-2023 by University of Kassel and Fraunhofer Institute for Energy Economics
 # and Energy System Technology (IEE), Kassel. All rights reserved.
-
 import numpy as np
+import sympy as sp
 from scipy.sparse import csr_matrix, vstack, hstack
 from scipy.sparse.linalg import spsolve, norm, inv
 
 from pandapower.estimation.algorithm.estimator import BaseEstimatorIRWLS, get_estimator
 from pandapower.estimation.algorithm.matrix_base import BaseAlgebra, \
     BaseAlgebraZeroInjConstraints
+from pandapower.estimation.algorithm.obs import get_elements_without_measurements, create_graph_from_eppci, \
+    print_connected_components
+from pandapower.estimation.idx_brch import P_FROM, P_TO, P_FROM_STD, P_TO_STD
 from pandapower.estimation.idx_bus import ZERO_INJ_FLAG, P, P_STD, Q, Q_STD
 from pandapower.estimation.ppc_conversion import ExtendedPPCI
+from pandapower.pypower.idx_brch import branch_cols
 from pandapower.pypower.idx_bus import bus_cols
 
 try:
@@ -33,16 +38,143 @@ class BaseAlgorithm:
 
         # Parameters for estimate
         self.eppci = None
+        self._net = None
+        self._ppc = None
         self.pp_meas_indices = None
 
     def check_observability(self, eppci: ExtendedPPCI, z):
         # Check if observability criterion is fulfilled and the state estimation is possible
+        self.run_observability_analysis()
         if len(z) < 2 * eppci["bus"].shape[0] - 1:
             self.logger.error("System is not observable (cancelling)")
             self.logger.error("Measurements available: %d. Measurements required: %d" %
                               (len(z), 2 * eppci["bus"].shape[0] - 1))
             raise UserWarning("Measurements available: %d. Measurements required: %d" %
                               (len(z), 2 * eppci["bus"].shape[0] - 1))
+
+    def delete_branch(self, eppci_obs, lines):
+        # if not lines.any():
+        #     return
+        ppci = eppci_obs.data
+        N = ppci["branch"].shape[0]
+        ppci["branch"] = np.delete(ppci["branch"], lines, axis=0)
+        p_bus_not_nan = ~np.isnan(ppci["bus"][:, bus_cols + P])
+        p_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + P_FROM])
+        p_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + P_TO])
+        meas_mask = np.concatenate([
+            p_bus_not_nan,
+            p_line_f_not_nan,
+            p_line_t_not_nan,
+        ])
+        eppci_obs.non_nan_meas_selector = np.flatnonzero(meas_mask)
+        if "Ybus" in ppci["internal"] and ppci["internal"]["Ybus"].size:
+            rows_to_keep = list(set(list(range(N))) - set(lines))
+            Yf = ppci["internal"]["Yf"]
+            ppci["internal"]["Yf"] = Yf[rows_to_keep, :]
+            Yt = ppci["internal"]["Yt"]
+            ppci["internal"]["Yt"] = Yt[rows_to_keep, :]
+
+    def delete_p_measurement(self, eppci_obs, bus_positions):
+        ppci = eppci_obs.data
+        ppci["bus"][bus_positions, bus_cols + P] = np.NaN
+        ppci["bus"][bus_positions, bus_cols + P_STD] = np.NaN
+        p_bus_not_nan = ~np.isnan(ppci["bus"][:, bus_cols + P])
+        p_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + P_FROM])
+        p_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + P_TO])
+        meas_mask = np.concatenate([
+            p_bus_not_nan,
+            p_line_f_not_nan,
+            p_line_t_not_nan,
+        ])
+        eppci_obs.non_nan_meas_selector = np.flatnonzero(meas_mask)
+
+        # Covariance matrix R
+        r_cov = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_STD],
+                                ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_STD],
+                                ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_STD],
+                                )).real.astype(np.float64)
+
+        eppci_obs.r_cov = r_cov
+
+    def save_to_csv(self, arr):
+        import pandas as pd
+
+        # Convert array to DataFrame
+        df = pd.DataFrame(arr)
+
+        # Save to CSV
+        df.to_csv("output.csv", index=False)
+
+    def run_observability_analysis(self, max_iter=5):
+
+        # Step 1
+        eppci_obs = deepcopy(self.eppci)
+
+        N = int(eppci_obs.data['bus'].shape[0])
+        eppci_obs.delta_v_bus_selector = list(range(eppci_obs.data['bus'].shape[0]))
+
+        while max_iter > 0:
+            max_iter -= 1
+
+            # Step 2
+            elements_to_drop = get_elements_without_measurements(eppci_obs)
+            self.delete_branch(eppci_obs, elements_to_drop)
+
+            # Step 3
+            sem = BaseAlgebra(eppci_obs)
+            H = sem.create_hx_jacobian(eppci_obs.E)
+            W = np.diagflat(1 / eppci_obs.r_cov ** 2)
+            G = H.T.dot(W).dot(H)
+
+            # Step 4
+            G_m = sp.Matrix(G)
+            m_rref, pivots = G_m.rref()
+
+            zero_pivots = list(set((range(H.shape[1]))) - set(pivots))
+            if not zero_pivots or len(zero_pivots) == 1 and zero_pivots[0] == N - 1:
+                print("no zero_pivots ")  # split msg
+                break
+            new_H_rows = np.zeros((len(zero_pivots), H.shape[1]))
+            r_cov = eppci_obs.r_cov
+
+            for i, v in enumerate(zero_pivots):
+                new_H_rows[i][v] = 1
+                r_cov = np.append(r_cov, 1)
+
+            # introduce  va pseudo-measurements
+            H_with_pseudo_meas = np.vstack((H, new_H_rows))
+            W_with_pseudo_meas = np.diagflat(1 / r_cov ** 2)
+
+            # Step 5
+            H_W_Z = np.zeros(N)
+            zero_pivots_number = len(zero_pivots)
+            H_W_Z[-zero_pivots_number:] = list(range(zero_pivots_number))
+            # Gain matrix G = H^T * W * H, G = LU
+            G_with_pseudo_meas = np.dot(H_with_pseudo_meas.T, np.dot(W_with_pseudo_meas, H_with_pseudo_meas))  # check
+            G_m_2 = csr_matrix(G_with_pseudo_meas)
+            d_E = spsolve(G_m_2, H_W_Z)
+
+            # Step 6
+            branch_power_flow = d_E[eppci_obs.data['branch'][:, 0].real.astype(np.int64)] - d_E[
+                eppci_obs.data['branch'][:, 1].real.astype(np.int64)]
+
+            # Step 7
+            branch_mask_without_power_flow = [True if abs(i) > 0.0000001 else False for i in branch_power_flow]
+            branch_idx__without_power_flow = np.flatnonzero(branch_mask_without_power_flow)
+            if not branch_idx__without_power_flow.any():
+                break
+            branch_without_power_flow = eppci_obs.data['branch'][branch_idx__without_power_flow]
+            self.delete_branch(eppci_obs, branch_idx__without_power_flow)
+
+            # Step 8
+
+            buses_with_p_to_delete = np.unique(np.concatenate((branch_without_power_flow[:, 0], branch_without_power_flow[:, 1])))
+            for bus_idx in buses_with_p_to_delete:
+                self.delete_p_measurement(eppci_obs, int(bus_idx))
+            a = 1
+
+        mg = create_graph_from_eppci(eppci_obs)
+        print_connected_components(mg, self._net)
 
     def check_result(self, current_error, cur_it):
         # print output for results
@@ -80,6 +212,8 @@ class WLSAlgorithm(BaseAlgorithm):
         logging.basicConfig(level=logging.DEBUG)
 
     def estimate(self, eppci: ExtendedPPCI, **kwargs):
+        self._ppc = kwargs["ppc"]
+        self._net = kwargs["net"]
         self.initialize(eppci)
         # matrix calculation object
         sem = BaseAlgebra(eppci)

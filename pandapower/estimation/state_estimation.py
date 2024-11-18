@@ -268,6 +268,10 @@ class StateEstimation:
                                                   ppc=self.ppc, eppci=self.eppci)
 
         # Estimate voltage magnitude and angle with the given estimator
+        opt_vars.update({
+            "ppc":self.ppc,
+            "net": self.net,
+        })
         self.eppci = self.solver.estimate(self.eppci, **opt_vars)
 
         if self.solver.successful:
