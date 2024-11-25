@@ -112,12 +112,14 @@ class BaseAlgorithm:
 
         N = int(eppci_obs.data['bus'].shape[0])
         eppci_obs.delta_v_bus_selector = list(range(eppci_obs.data['bus'].shape[0]))
+        current_iteration = 1
+        while current_iteration <= max_iter:
 
-        while max_iter > 0:
-            max_iter -= 1
+            print(f"Iteration: {current_iteration}")
 
             # Step 2
             elements_to_drop = get_elements_without_measurements(eppci_obs)
+            print(f"Number of branches without measurements to delete = {len(elements_to_drop)}. Branches {elements_to_drop}")
             self.delete_branch(eppci_obs, elements_to_drop)
 
             # Step 3
@@ -145,14 +147,29 @@ class BaseAlgorithm:
             H_with_pseudo_meas = np.vstack((H, new_H_rows))
             W_with_pseudo_meas = np.diagflat(1 / r_cov ** 2)
 
+            print(f"Introduced {len(zero_pivots)} pseudo measurements")
+
             # Step 5
-            H_W_Z = np.zeros(N)
+            Z_ = np.zeros(H_with_pseudo_meas.shape[0])
             zero_pivots_number = len(zero_pivots)
-            H_W_Z[-zero_pivots_number:] = list(range(zero_pivots_number))
+            Z_[-zero_pivots_number:] = list(range(zero_pivots_number))
+            H_T_W = H_with_pseudo_meas.T.dot(W_with_pseudo_meas)
+            H_W_Z = H_T_W.dot(Z_)
             # Gain matrix G = H^T * W * H, G = LU
             G_with_pseudo_meas = np.dot(H_with_pseudo_meas.T, np.dot(W_with_pseudo_meas, H_with_pseudo_meas))  # check
             G_m_2 = csr_matrix(G_with_pseudo_meas)
             d_E = spsolve(G_m_2, H_W_Z)
+
+            if np.any(np.isnan(d_E)):
+                raise Exception("Equation solving failed")
+
+            # Compute the residual
+            residual = G_m_2 @ d_E - H_W_Z
+
+            # Calculate the squared residual
+            squared_residual = np.sum(residual ** 2)
+
+            print(f"Residual for theta vector at step 5: {squared_residual}")
 
             # Step 6
             branch_power_flow = d_E[eppci_obs.data['branch'][:, 0].real.astype(np.int64)] - d_E[
@@ -164,14 +181,17 @@ class BaseAlgorithm:
             if not branch_idx__without_power_flow.any():
                 break
             branch_without_power_flow = eppci_obs.data['branch'][branch_idx__without_power_flow]
+            print(f"Number of branches without power flow {len(branch_without_power_flow)}. Branches: {branch_without_power_flow}")
             self.delete_branch(eppci_obs, branch_idx__without_power_flow)
 
             # Step 8
-
             buses_with_p_to_delete = np.unique(np.concatenate((branch_without_power_flow[:, 0], branch_without_power_flow[:, 1])))
             for bus_idx in buses_with_p_to_delete:
                 self.delete_p_measurement(eppci_obs, int(bus_idx))
-            a = 1
+            print(f" Number of power injections to delete {len(buses_with_p_to_delete)}. At buses {buses_with_p_to_delete} ")
+
+            # Step 9 - increase counter and go to step 2
+            current_iteration += 1
 
         mg = create_graph_from_eppci(eppci_obs)
         print_connected_components(mg, self._net)

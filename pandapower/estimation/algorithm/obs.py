@@ -85,7 +85,7 @@ def create_graph_from_eppci(eppci):
 def print_connected_components(mg, net: pp.pandapowerNet):
     connected_components = list(nx.connected_components(mg))
     number_of_buses = len(net.bus)
-
+    print("\nResult: ")
     for counter, component in enumerate(connected_components):
         eppci_bus_idx = [i for i in component if i<number_of_buses]
         bus_idx = net.bus.iloc[eppci_bus_idx].index
