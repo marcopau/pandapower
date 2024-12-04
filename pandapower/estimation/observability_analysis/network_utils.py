@@ -36,7 +36,6 @@ def has_injection_measurements(eppci, bus_position):
     return has_p_injection
 
 
-#
 # # Function to identify branches without measurements and without injection at connected buses
 def get_elements_without_measurements(eppci):
     elements_to_drop = []

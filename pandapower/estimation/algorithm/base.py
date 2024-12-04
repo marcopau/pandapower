@@ -4,14 +4,14 @@ from copy import deepcopy
 # Copyright (c) 2016-2023 by University of Kassel and Fraunhofer Institute for Energy Economics
 # and Energy System Technology (IEE), Kassel. All rights reserved.
 import numpy as np
-import sympy as sp
 from scipy.sparse import csr_matrix, vstack, hstack
 from scipy.sparse.linalg import spsolve, norm, inv
-
+from scipy.linalg import lu
+from pandapower.pypower.idx_brch import BR_R, BR_X, BR_B, BR_G, SHIFT, TAP
 from pandapower.estimation.algorithm.estimator import BaseEstimatorIRWLS, get_estimator
 from pandapower.estimation.algorithm.matrix_base import BaseAlgebra, \
     BaseAlgebraZeroInjConstraints
-from pandapower.estimation.algorithm.obs import get_elements_without_measurements, create_graph_from_eppci, \
+from pandapower.estimation.observability_analysis.network_utils import get_elements_without_measurements, create_graph_from_eppci, \
     print_connected_components
 from pandapower.estimation.idx_brch import P_FROM, P_TO, P_FROM_STD, P_TO_STD
 from pandapower.estimation.idx_bus import ZERO_INJ_FLAG, P, P_STD, Q, Q_STD
@@ -44,7 +44,7 @@ class BaseAlgorithm:
 
     def check_observability(self, eppci: ExtendedPPCI, z):
         # Check if observability criterion is fulfilled and the state estimation is possible
-        self.run_observability_analysis()
+        # self.run_observability_analysis()
         if len(z) < 2 * eppci["bus"].shape[0] - 1:
             self.logger.error("System is not observable (cancelling)")
             self.logger.error("Measurements available: %d. Measurements required: %d" %
@@ -108,10 +108,20 @@ class BaseAlgorithm:
     def run_observability_analysis(self, max_iter=5):
 
         # Step 1
+        tolerance = 1e-12
         eppci_obs = deepcopy(self.eppci)
 
         N = int(eppci_obs.data['bus'].shape[0])
         eppci_obs.delta_v_bus_selector = list(range(eppci_obs.data['bus'].shape[0]))
+        eppci_obs.data['branch'][:, BR_R] = np.zeros(len(eppci_obs.data['branch'][:, BR_R]))
+        eppci_obs.data['branch'][:, BR_X] = np.ones(len(eppci_obs.data['branch'][:, BR_X]))
+
+        eppci_obs.data['branch'][:, BR_B] = np.zeros(len(eppci_obs.data['branch'][:, BR_B]))
+        eppci_obs.data['branch'][:, BR_G] = np.zeros(len(eppci_obs.data['branch'][:, BR_G]))
+
+        eppci_obs.data['branch'][:, TAP] = np.ones(len(eppci_obs.data['branch'][:, TAP]))
+        eppci_obs.data['branch'][:, SHIFT] = np.zeros(len(eppci_obs.data['branch'][:, SHIFT]))
+
         current_iteration = 1
         while current_iteration <= max_iter:
 
@@ -125,17 +135,22 @@ class BaseAlgorithm:
             # Step 3
             sem = BaseAlgebra(eppci_obs)
             H = sem.create_hx_jacobian(eppci_obs.E)
-            W = np.diagflat(1 / eppci_obs.r_cov ** 2)
+            W = np.eye(len(eppci_obs.r_cov))
             G = H.T.dot(W).dot(H)
 
             # Step 4
-            G_m = sp.Matrix(G)
-            m_rref, pivots = G_m.rref()
+            # LU decomposition with pivoting
+            P, L, U = lu(G)
+            zero_pivots = [i for i in range(U.shape[0]) if abs(U[i, i]) < tolerance]
 
-            zero_pivots = list(set((range(H.shape[1]))) - set(pivots))
             if not zero_pivots or len(zero_pivots) == 1 and zero_pivots[0] == N - 1:
-                print("no zero_pivots ")  # split msg
+                print("No zero_pivots. Stop iterations.")
                 break
+
+            if len(zero_pivots) == 1 and zero_pivots[0] == N - 1:
+                print("Only one zero pivot. Stop iterations.")
+                break
+
             new_H_rows = np.zeros((len(zero_pivots), H.shape[1]))
             r_cov = eppci_obs.r_cov
 
@@ -145,7 +160,7 @@ class BaseAlgorithm:
 
             # introduce  va pseudo-measurements
             H_with_pseudo_meas = np.vstack((H, new_H_rows))
-            W_with_pseudo_meas = np.diagflat(1 / r_cov ** 2)
+            W_with_pseudo_meas = np.eye(len(r_cov))
 
             print(f"Introduced {len(zero_pivots)} pseudo measurements")
 
@@ -157,6 +172,9 @@ class BaseAlgorithm:
             H_W_Z = H_T_W.dot(Z_)
             # Gain matrix G = H^T * W * H, G = LU
             G_with_pseudo_meas = np.dot(H_with_pseudo_meas.T, np.dot(W_with_pseudo_meas, H_with_pseudo_meas))  # check
+            cond = np.linalg.cond(G_with_pseudo_meas)
+            print(f"Condition number: {cond}")
+            rank = np.linalg.matrix_rank(G_with_pseudo_meas)
             G_m_2 = csr_matrix(G_with_pseudo_meas)
             d_E = spsolve(G_m_2, H_W_Z)
 
@@ -176,12 +194,13 @@ class BaseAlgorithm:
                 eppci_obs.data['branch'][:, 1].real.astype(np.int64)]
 
             # Step 7
-            branch_mask_without_power_flow = [True if abs(i) > 0.0000001 else False for i in branch_power_flow]
+            branch_mask_without_power_flow = [True if abs(i) > tolerance else False for i in branch_power_flow]
             branch_idx__without_power_flow = np.flatnonzero(branch_mask_without_power_flow)
             if not branch_idx__without_power_flow.any():
+                print("No branches without power flow. Stop iterations. ")
                 break
             branch_without_power_flow = eppci_obs.data['branch'][branch_idx__without_power_flow]
-            print(f"Number of branches without power flow {len(branch_without_power_flow)}. Branches: {branch_without_power_flow}")
+            print(f"Number of branches without power flow {len(branch_without_power_flow)}. Branches: {branch_idx__without_power_flow}")
             self.delete_branch(eppci_obs, branch_idx__without_power_flow)
 
             # Step 8
@@ -240,7 +259,7 @@ class WLSAlgorithm(BaseAlgorithm):
 
         current_error, cur_it = 100., 0
         # invert covariance matrix
-        eppci.r_cov[eppci.r_cov<(10**(-5))] = 10**(-5)
+        eppci.r_cov[eppci.r_cov < (10 ** (-5))] = 10 ** (-5)
         r_inv = csr_matrix(np.diagflat(1 / eppci.r_cov ** 2))
         E = eppci.E
         while current_error > self.tolerance and cur_it < self.max_iterations:
@@ -256,17 +275,17 @@ class WLSAlgorithm(BaseAlgorithm):
                 # because with flat start they have null derivative
                 if cur_it == 0 and eppci.any_i_meas:
                     idx = eppci.idx_non_imeas
-                    r_inv = r_inv[idx,:][:,idx]
-                    r = r[idx,:]
-                    H = H[idx,:]
+                    r_inv = r_inv[idx, :][:, idx]
+                    r = r[idx, :]
+                    H = H[idx, :]
 
                 # gain matrix G_m
                 # G_m = H^t * R^-1 * H
                 G_m = H.T * (r_inv * H)
                 norm_G = norm(G_m, np.inf)
                 norm_invG = norm(inv(G_m), np.inf)
-                cond = norm_G*norm_invG
-                if cond > 10**18:
+                cond = norm_G * norm_invG
+                if cond > 10 ** 18:
                     self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
@@ -277,7 +296,7 @@ class WLSAlgorithm(BaseAlgorithm):
                 # operating conditions far from starting state variables
                 current_error = np.max(np.abs(d_E))
                 if current_error > 0.35:
-                    d_E = d_E*0.35/current_error
+                    d_E = d_E * 0.35 / current_error
 
                 # Update E with d_E
                 E += d_E.ravel()
@@ -285,7 +304,7 @@ class WLSAlgorithm(BaseAlgorithm):
 
                 # log data 
                 current_error = np.max(np.abs(d_E))
-                obj_func = (r.T*r_inv*r)[0,0]
+                obj_func = (r.T * r_inv * r)[0, 0]
                 self.logger.debug("Current delta_x: {:.7f}".format(current_error))
                 self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
 
