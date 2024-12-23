@@ -12,19 +12,20 @@ from pandapower.estimation.algorithm.matrix_base import BaseAlgebra
 from pandapower.estimation.idx_brch import P_FROM, P_TO, Q_FROM, Q_TO, Q_FROM_STD, Q_TO_STD, IA_FROM, IA_FROM_STD, IA_TO, IA_TO_STD, \
     IM_FROM, IM_FROM_STD, IM_TO, IM_TO_STD
 from pandapower.estimation.idx_bus import P, P_STD, Q, Q_STD, VM, VM_STD, VA, VA_STD
-from pandapower.estimation.observability_analysis.network_utils import get_elements_without_measurements, create_graph_from_eppci
 from pandapower.estimation.ppc_conversion import ExtendedPPCI
 from pandapower.estimation.ppc_conversion import pp2eppci
 from pandapower.pypower.idx_brch import BR_R, BR_X, BR_B, BR_G, SHIFT, TAP
 from pandapower.pypower.idx_brch import branch_cols
 from pandapower.pypower.idx_bus import bus_cols
+from pandapower.pypower.idx_bus import bus_cols, GS, BS
 
 logger = logging.getLogger(__name__)
 
 
 class PseudoMeasurementsHandler:
-    def __init__(self, eppci: ExtendedPPCI):
+    def __init__(self, eppci: ExtendedPPCI, net=None):
         self.eppci = deepcopy(eppci)
+        self.net = net
 
     @classmethod
     def from_ppnet(
@@ -33,14 +34,23 @@ class PseudoMeasurementsHandler:
             delta_start='flat',
             algorithm='wls',
             calculate_voltage_angles=True,
-            zero_injection=None,
+            zero_injection='auto',
     ) -> "PseudoMeasurementsHandler":
-        _, _, eppci = pp2eppci(net, v_start=v_start, delta_start=delta_start,
-                               calculate_voltage_angles=calculate_voltage_angles,
-                               zero_injection=zero_injection, algorithm=algorithm,
-                               )
+        net, _, eppci = pp2eppci(net, v_start=v_start, delta_start=delta_start,
+                                 calculate_voltage_angles=calculate_voltage_angles,
+                                 zero_injection=zero_injection, algorithm=algorithm,
+                                 )
 
-        return cls(eppci)
+        return cls(eppci, net)
+
+    def convert_res_to_ppnet(self, ppci_result):
+        res = {}
+        print("Result")
+        for bs in ppci_result:
+            tmp = [i for i, j in enumerate(self.net._pd2ppc_lookups['bus']) if j == bs]
+            res[bs] = tmp
+            print(f"{bs}: {tmp}")
+        return res
 
     def clean_not_p_measurements(self):
         ppci = self.eppci.data
@@ -80,6 +90,9 @@ class PseudoMeasurementsHandler:
 
         self.eppci.data['branch'][:, BR_B] = np.zeros(len(self.eppci.data['branch'][:, BR_B]))
         self.eppci.data['branch'][:, BR_G] = np.zeros(len(self.eppci.data['branch'][:, BR_G]))
+
+        self.eppci.data['bus'][:, GS] = np.zeros(len(self.eppci.data['bus'][:, GS]))
+        self.eppci.data['bus'][:, BS] = np.zeros(len(self.eppci.data['bus'][:, BS]))
 
         self.eppci.data['branch'][:, TAP] = np.ones(len(self.eppci.data['branch'][:, TAP]))
         self.eppci.data['branch'][:, SHIFT] = np.zeros(len(self.eppci.data['branch'][:, SHIFT]))
@@ -153,13 +166,33 @@ class PseudoMeasurementsHandler:
         h_w_z = np.dot(jacobian_with_pseudo_meas.T, z)  # W is the identity matrix, so multiplication has no effect and is skipped
 
         gain_matrix_with_pseudo_meas = np.dot(jacobian_with_pseudo_meas.T, jacobian_with_pseudo_meas)  # check
-        L, D, perm = ldl(gain_matrix_with_pseudo_meas)
         cond = np.linalg.cond(gain_matrix_with_pseudo_meas)
-        logger.info(f"Condition number: {cond}")
+        print(f"Condition number: {cond}")
 
         sparse_gain_matrix = csr_matrix(gain_matrix_with_pseudo_meas)
         solution = spsolve(sparse_gain_matrix, h_w_z)
+        self._validate_solution(gain_matrix_with_pseudo_meas, solution, h_w_z)
         return solution
+
+    def _validate_solution(self, A: np.ndarray, x: np.ndarray, b: np.ndarray) -> None:
+        """
+           Checks for NaN values in the solution vector x, and if valid, computes and prints the squared residual.
+
+           Parameters:
+               A (np.ndarray): The coefficient matrix.
+               x (np.ndarray): The solution vector.
+               b (np.ndarray): The right-hand side vector.
+
+           Raises:
+               ValueError: If x contains NaN values.
+           """
+        if np.any(np.isnan(x)):
+            raise Exception("Equation solving failed")
+
+        # Compute the residual
+        residual = np.dot(A, x) - b
+        squared_residual = np.sum(residual ** 2)
+        # print(f"Residual for theta vector at step 5: {squared_residual}")
 
     def validate_zero_pivots(self, zero_pivots: np.ndarray, N: int):
         stop_iteration = False
@@ -181,11 +214,12 @@ class PseudoMeasurementsHandler:
         logger.info(f"Introduced {len(zero_pivots)} pseudo measurements")
         return jacobian_with_pseudo_meas
 
-    def handle(self, max_iter=15, tolerance=1e-12):
+    def handle(self, max_iter=150, tolerance=1e-10):
         # Step 1
         buses_with_pseudo_power_injection = []
         N = int(self.eppci.data['bus'].shape[0])
-
+        self.eppci.E[:N - 1] = 0
+        self.eppci.E[N:] = 1
         self.clean_not_p_measurements()
         self.set_delta_v_bus_selector()
         self.reset_network_values()
@@ -236,7 +270,9 @@ class PseudoMeasurementsHandler:
             residuals = pseudo_theta - solution[zero_pivots]
             non_zero_indices = np.where(np.abs(residuals) > tolerance)[0]
             pivots_with_non_zero_residuals = zero_pivots[non_zero_indices]
-
+            if not any(pivots_with_non_zero_residuals):
+                print("not any(pivots_with_non_zero_residuals)")
+                continue
             theta_candidate_to_drop = pivots_with_non_zero_residuals[0]
 
             # drop redundant pseudo measurement

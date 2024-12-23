@@ -294,7 +294,7 @@ def _add_zero_injection(net, ppci, bus_append, zero_injection):
         if isinstance(zero_injection, str):
             if zero_injection == 'auto':
                 # identify bus without elements and pq measurements as zero injection
-                zero_inj_bus_mask = (ppci["bus"][:, 1] == 1) & (ppci["bus"][:, 2:6] == 0).all(axis=1) & \
+                zero_inj_bus_mask = (ppci["bus"][:, 1] == 1) & (ppci["bus"][:, 2:4] == 0).all(axis=1) & \
                                     np.isnan(bus_append[:, P:(Q_STD + 1)]).all(axis=1)
                 bus_append[zero_inj_bus_mask, ZERO_INJ_FLAG] = True
             elif zero_injection != "aux_bus":

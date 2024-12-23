@@ -1,7 +1,9 @@
-# Get lists of branch elements
+from collections import defaultdict
+from itertools import chain
 
 import networkx as nx
 import numpy as np
+from pandapower.estimation.ppc_conversion import ExtendedPPCI
 
 import pandapower as pp
 from pandapower.pypower.idx_brch import branch_cols
@@ -22,22 +24,12 @@ INDEX = 0
 F_BUS = 1
 T_BUS = 2
 
-WEIGHT = 0
-BR_R = 1
-BR_X = 2
-BR_Z = 3
 
+def get_elements_without_measurements(eppci: ExtendedPPCI) -> list[int]:
+    """
+    Function to identify branches without measurements and without injection at connected buses.
+    """
 
-# Helper function to check for power injection measurements at a bus
-def has_injection_measurements(eppci, bus_position):
-    # Check if there are measurements of type 'p'
-    ppci = eppci.data
-    has_p_injection = ~np.isnan(ppci["bus"][bus_position][bus_cols + P])
-    return has_p_injection
-
-
-# # Function to identify branches without measurements and without injection at connected buses
-def get_elements_without_measurements(eppci):
     elements_to_drop = []
     ppci = eppci.data
     for idx, branch in enumerate(ppci['branch']):
@@ -52,17 +44,16 @@ def get_elements_without_measurements(eppci):
     return elements_to_drop
 
 
-def init_par(tab):
+def init_par(tab: np.ndarray):
     n = tab.shape[0]
     indices = np.zeros((n, 3), dtype=np.int64)
-    indices[:, INDEX] = list(range(n))
-
+    indices[:, INDEX] = list(tab[:, -1])
     parameters = np.ones((n, 1), dtype=float)
-
     return indices, parameters, [True for _ in range(n)]
 
 
-def create_graph_from_eppci(eppci):
+def create_graph_from_eppci(eppci: ExtendedPPCI) -> nx.MultiGraph:
+   # think about second FR
     mg = nx.MultiGraph()
     branch = eppci.data["branch"]
 
@@ -70,8 +61,7 @@ def create_graph_from_eppci(eppci):
     indices[:, F_BUS] = branch[:, 0]
     indices[:, T_BUS] = branch[:, 1]
 
-    add_edges(mg, indices, parameter, in_service, None, "line", False,
-              'pu')
+    add_edges(mg, indices, parameter, in_service, None, "line", False, 'pu')
 
     # add all buses that were not added when creating branches
     bus = eppci.data["bus"]
@@ -82,12 +72,24 @@ def create_graph_from_eppci(eppci):
 
 
 def print_connected_components(mg, net: pp.pandapowerNet):
+    eppci_bus_to_ppnet_map = defaultdict(list)
+    for i, v in enumerate(net._pd2ppc_lookups["bus"]):
+        if v != -1:
+            eppci_bus_to_ppnet_map[v].append(i)
+
     connected_components = list(nx.connected_components(mg))
-    number_of_buses = len(net.bus)
+    max_bus_index = max(net.bus.index)
     print("\nResult: ")
-    for counter, component in enumerate(connected_components):
-        eppci_bus_idx = [i for i in component if i<number_of_buses]
-        bus_idx = net.bus.iloc[eppci_bus_idx].index
-        # eppci_trafo3w_idx = [i-number_of_buses for i in component if i >= number_of_buses]
-        # trafo3w_idx = net.trafo3w.iloc[eppci_trafo3w_idx].index
-        print(f"Component {counter}: Bus: {bus_idx.tolist()}")
+    all_busses_nested = []
+    counter = 0
+    for component in connected_components:
+        bus_idx = [[j for j in eppci_bus_to_ppnet_map[i] if j <= max_bus_index] for i in component]
+        all_busses_nested += bus_idx
+        if any(bus_idx):
+            bus_idx = [i for i in bus_idx if i]
+            print(f"Component {counter}: Len : {len(bus_idx)}  Bus: {bus_idx}")
+            counter += 1
+
+    all_busses = list(chain.from_iterable(all_busses_nested))
+    if len(all_busses) != len(net.bus):
+        raise Exception("!!!!!result doesn't have all buses!!!!!!")

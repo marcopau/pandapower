@@ -1,0 +1,197 @@
+# -*- coding: utf-8 -*-
+from collections import defaultdict
+from itertools import chain
+
+import networkx as nx
+import numpy as np
+
+import pandapower as pp
+from pandapower.estimation.idx_bus import VM
+from pandapower.estimation.ppc_conversion import ExtendedPPCI
+from pandapower.pypower.idx_bus import bus_cols
+from pandapower.results_branch import _get_trafo3w_lookups
+
+
+def _get_dropped_lines(net: pp.pandapowerNet, dropped_branches):
+    f, t = net._pd2ppc_lookups["branch"]["line"]
+    dropped_lines_eppci = [i for i in dropped_branches if f <= i < t]
+    dropped_lines_net = net.line.iloc[dropped_lines_eppci]
+    return list(dropped_lines_net.index)
+
+
+def _get_dropped_trafo(net: pp.pandapowerNet, dropped_branches):
+    f, t = net._pd2ppc_lookups["branch"]["trafo"]
+    dropped_trafo_eppci = [i - f for i in dropped_branches if f <= i < t]
+    dropped_trafo_net = net.trafo.iloc[dropped_trafo_eppci]
+    return list(dropped_trafo_net.index)
+
+
+def _get_dropped_trafo3w(net: pp.pandapowerNet, dropped_branches):
+    f, hv, mv, lv = _get_trafo3w_lookups(net)
+
+    trafo3w_hv = [i - f for i in dropped_branches if f <= i < hv]
+    trafo3w_mv = [i - hv for i in dropped_branches if hv <= i < mv]
+    trafo3w_lv = [i - mv for i in dropped_branches if mv <= i < lv]
+
+    result = {}
+
+    dropped_trafo3w_hv_net = net.trafo3w.iloc[trafo3w_hv]
+    result["dropped_trafo3w_hv"] = list(dropped_trafo3w_hv_net.index)
+
+    dropped_trafo3w_mv_net = net.trafo3w.iloc[trafo3w_mv]
+    result["dropped_trafo3w_mv"] = list(dropped_trafo3w_mv_net.index)
+
+    dropped_trafo3w_lv_net = net.trafo3w.iloc[trafo3w_lv]
+    result["dropped_trafo3w_lv"] = list(dropped_trafo3w_lv_net.index)
+
+    return result
+
+
+def get_dropped_elements(net: pp.pandapowerNet, eppci: ExtendedPPCI, all_branches_idx: list[int]):
+    dropped_branches = list(set(all_branches_idx) - set(eppci.data['branch'][:, -1]))
+    _get_dropped_lines(net, dropped_branches)
+    _get_dropped_trafo(net, dropped_branches)
+    _get_dropped_trafo3w(net, dropped_branches)
+
+
+def _map_branches_to_lines(net: pp.pandapowerNet, component_id, component_branches):
+    """Assign line branches of a component to the observability structure in the network."""
+    line_index_from, line_index_to = net._pd2ppc_lookups["branch"]["line"]
+    lines_eppci_idx = filter(lambda idx: line_index_from <= idx < line_index_to, component_branches)
+
+    # Extract line network indices
+    lines_net_idx = net.line.iloc[lines_eppci_idx]
+
+    # Update observability lookup with component ID
+    net._observability_lookup["line"][list(lines_net_idx.index)] = component_id
+
+
+def _map_branches_to_trafo(net: pp.pandapowerNet, component_id, component_branches):
+    """
+       Assign transformer branches of a component to the observability structure in the network.
+    """
+    trafo_index_from, trafo_index_to = net._pd2ppc_lookups["branch"]["trafo"]
+    trafo_eppci_idx = [i - trafo_index_from for i in component_branches if trafo_index_from <= i < trafo_index_to]
+
+    # Extract transformer network indices
+    trafo_net = net.trafo.iloc[trafo_eppci_idx]
+
+    # Update observability lookup with component ID
+    net._observability_lookup["trafo"][list(trafo_net.index)] = component_id
+
+
+def _map_branches_to_trafo3w(net: pp.pandapowerNet, component_id, component_branches):
+    """
+       Assign 3-winding transformer branches of a component to the observability structure in the network.
+    """
+    trafo3w_index_from, trafo3w_index_hv, trafo3w_index_mv, trafo3w_index_lv = _get_trafo3w_lookups(net)
+
+    trafo3w_hv = [
+        i - trafo3w_index_from
+        for i in component_branches
+        if trafo3w_index_from <= i < trafo3w_index_hv
+    ]
+    trafo3w_mv = [
+        i - trafo3w_index_hv
+        for i in component_branches
+        if trafo3w_index_hv <= i < trafo3w_index_mv
+    ]
+    trafo3w_lv = [
+        i - trafo3w_index_mv
+        for i in component_branches
+        if trafo3w_index_mv <= i < trafo3w_index_lv
+    ]
+
+    # Combine all indices and remove duplicates
+    all_trafo3w_idx = list(set(trafo3w_lv + trafo3w_mv + trafo3w_hv))
+
+    # Extract transformer 3-winding network indices
+    trafo3w_hv_net = net.trafo3w.iloc[all_trafo3w_idx]
+
+    # Update observability lookup with component ID
+    net._observability_lookup["trafo3w"][list(trafo3w_hv_net.index)] = component_id
+
+
+def _init_observability_lookup(net: pp.pandapowerNet):
+    net._observability_lookup = {
+        "line": np.full(max(net.line.index + 1) + 1, -1, dtype=int),
+        "trafo": np.full(max(net.trafo.index + 1) + 1, -1, dtype=int),
+        "trafo3w": np.full(max(net.trafo3w.index + 1) + 1, -1, dtype=int),
+        "bus": np.full(max(net.bus.index + 1) + 1, -1, dtype=int)
+    }
+
+
+def _map_buses_to_components(eppci: ExtendedPPCI, net: pp.pandapowerNet):
+    """
+        Maps buses in the ExtendedPPCI structure to their corresponding observable islands
+        and updates the observability lookup in the pandapower network
+    """
+    # Map ExtendedPPCI bus indices to corresponding pandapower net bus indices
+    eppci_bus_to_ppnet_map = defaultdict(list)
+    for i, v in enumerate(net._pd2ppc_lookups["bus"]):
+        if v != -1:
+            eppci_bus_to_ppnet_map[v].append(i)
+
+    # Group buses by their observable island IDs
+    sub_components = defaultdict(list)
+    for ind, value in enumerate(eppci.data['bus'][:, -1]):
+        sub_components[value].append(ind)
+
+    # Update observability lookup for each bus group
+    max_bus_index = max(net.bus.index)
+    for component_id, node_buses in sub_components.items():
+        bus_idx = [[j for j in eppci_bus_to_ppnet_map[i] if j <= max_bus_index] for i in node_buses]
+        chain_bus_idx = list(chain.from_iterable(bus_idx))
+        if any(chain_bus_idx):
+            net._observability_lookup["bus"][chain_bus_idx] = component_id
+
+
+def _map_branches_to_components(eppci: ExtendedPPCI, net: pp.pandapowerNet):
+    """
+        Maps branches in the eppci structure to their respective components and integrates this mapping
+        into the pandapower network model.
+    """
+    # Group branch indices by component ID
+    sub_components = defaultdict(list)
+    for ind, value in enumerate(eppci.data['branch'][:, -1]):
+        sub_components[value].append(ind)
+
+    # Add branches to the network model based on their component ID
+    for component_id, node_buses in sub_components.items():
+        _map_branches_to_lines(net, component_id, node_buses)
+        _map_branches_to_trafo(net, component_id, node_buses)
+        _map_branches_to_trafo3w(net, component_id, node_buses)
+
+
+def add_connected_components_to_net(eppci: ExtendedPPCI, net: pp.pandapowerNet):
+    """
+    Pass information of observability back to pandapower from eppci to net._observability_lookup
+    """
+    _init_observability_lookup(net)
+    _map_buses_to_components(eppci, net)
+    _map_branches_to_components(eppci, net)
+
+
+def add_connected_components_to_eppci(graph: nx.MultiGraph, original_eppci: ExtendedPPCI):
+    # Find all subgraphs
+    subgraphs = [graph.subgraph(component) for component in nx.connected_components(graph)]
+
+    # Add additional column to 'bus'
+    all_bus_idx = np.full(original_eppci.data['bus'].shape[0], -1, dtype=int)
+    original_eppci.data['bus'] = np.hstack((original_eppci.data['bus'], all_bus_idx.reshape(-1, 1)))
+
+    # Assign each bus to its corresponding observable island
+    for ind, component in enumerate(subgraphs):
+        # Check if there is a voltage measurement for an observable island
+        if any(original_eppci.data['bus'][component.nodes][:, bus_cols + VM]):
+            original_eppci.data['bus'][:, -1][list(component.nodes)] = ind
+
+    # Add additional column to 'branch'
+    all_branch_idx = np.full(original_eppci.data['branch'].shape[0], -1, dtype=int)
+    original_eppci.data['branch'] = np.hstack((original_eppci.data['branch'], all_branch_idx.reshape(-1, 1)))
+
+    # Assign each branch to its corresponding observable island
+    for ind, component in enumerate(subgraphs):
+        component_branches = [i[2][1] for i in component.edges]
+        if any(component_branches):
+            original_eppci.data['branch'][:, -1][component_branches] = ind

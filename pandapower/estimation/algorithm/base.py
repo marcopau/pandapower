@@ -11,7 +11,7 @@ from pandapower.pypower.idx_brch import BR_R, BR_X, BR_B, BR_G, SHIFT, TAP
 from pandapower.estimation.algorithm.estimator import BaseEstimatorIRWLS, get_estimator
 from pandapower.estimation.algorithm.matrix_base import BaseAlgebra, \
     BaseAlgebraZeroInjConstraints
-from pandapower.estimation.observability_analysis.network_utils import get_elements_without_measurements, create_graph_from_eppci, \
+from pandapower.observability_analysis.network_utils import get_elements_without_measurements, create_graph_from_eppci, \
     print_connected_components
 from pandapower.estimation.idx_brch import P_FROM, P_TO, P_FROM_STD, P_TO_STD
 from pandapower.estimation.idx_bus import ZERO_INJ_FLAG, P, P_STD, Q, Q_STD
@@ -105,115 +105,6 @@ class BaseAlgorithm:
         # Save to CSV
         df.to_csv("output.csv", index=False)
 
-    def run_observability_analysis(self, max_iter=5):
-
-        # Step 1
-        tolerance = 1e-12
-        eppci_obs = deepcopy(self.eppci)
-
-        N = int(eppci_obs.data['bus'].shape[0])
-        eppci_obs.delta_v_bus_selector = list(range(eppci_obs.data['bus'].shape[0]))
-        eppci_obs.data['branch'][:, BR_R] = np.zeros(len(eppci_obs.data['branch'][:, BR_R]))
-        eppci_obs.data['branch'][:, BR_X] = np.ones(len(eppci_obs.data['branch'][:, BR_X]))
-
-        eppci_obs.data['branch'][:, BR_B] = np.zeros(len(eppci_obs.data['branch'][:, BR_B]))
-        eppci_obs.data['branch'][:, BR_G] = np.zeros(len(eppci_obs.data['branch'][:, BR_G]))
-
-        eppci_obs.data['branch'][:, TAP] = np.ones(len(eppci_obs.data['branch'][:, TAP]))
-        eppci_obs.data['branch'][:, SHIFT] = np.zeros(len(eppci_obs.data['branch'][:, SHIFT]))
-
-        current_iteration = 1
-        while current_iteration <= max_iter:
-
-            print(f"Iteration: {current_iteration}")
-
-            # Step 2
-            elements_to_drop = get_elements_without_measurements(eppci_obs)
-            print(f"Number of branches without measurements to delete = {len(elements_to_drop)}. Branches {elements_to_drop}")
-            self.delete_branch(eppci_obs, elements_to_drop)
-
-            # Step 3
-            sem = BaseAlgebra(eppci_obs)
-            H = sem.create_hx_jacobian(eppci_obs.E)
-            W = np.eye(len(eppci_obs.r_cov))
-            G = H.T.dot(W).dot(H)
-
-            # Step 4
-            # LU decomposition with pivoting
-            P, L, U = lu(G)
-            zero_pivots = [i for i in range(U.shape[0]) if abs(U[i, i]) < tolerance]
-
-            if not zero_pivots or len(zero_pivots) == 1 and zero_pivots[0] == N - 1:
-                print("No zero_pivots. Stop iterations.")
-                break
-
-            if len(zero_pivots) == 1 and zero_pivots[0] == N - 1:
-                print("Only one zero pivot. Stop iterations.")
-                break
-
-            new_H_rows = np.zeros((len(zero_pivots), H.shape[1]))
-            r_cov = eppci_obs.r_cov
-
-            for i, v in enumerate(zero_pivots):
-                new_H_rows[i][v] = 1
-                r_cov = np.append(r_cov, 1)
-
-            # introduce  va pseudo-measurements
-            H_with_pseudo_meas = np.vstack((H, new_H_rows))
-            W_with_pseudo_meas = np.eye(len(r_cov))
-
-            print(f"Introduced {len(zero_pivots)} pseudo measurements")
-
-            # Step 5
-            Z_ = np.zeros(H_with_pseudo_meas.shape[0])
-            zero_pivots_number = len(zero_pivots)
-            Z_[-zero_pivots_number:] = list(range(zero_pivots_number))
-            H_T_W = H_with_pseudo_meas.T.dot(W_with_pseudo_meas)
-            H_W_Z = H_T_W.dot(Z_)
-            # Gain matrix G = H^T * W * H, G = LU
-            G_with_pseudo_meas = np.dot(H_with_pseudo_meas.T, np.dot(W_with_pseudo_meas, H_with_pseudo_meas))  # check
-            cond = np.linalg.cond(G_with_pseudo_meas)
-            print(f"Condition number: {cond}")
-            rank = np.linalg.matrix_rank(G_with_pseudo_meas)
-            G_m_2 = csr_matrix(G_with_pseudo_meas)
-            d_E = spsolve(G_m_2, H_W_Z)
-
-            if np.any(np.isnan(d_E)):
-                raise Exception("Equation solving failed")
-
-            # Compute the residual
-            residual = G_m_2 @ d_E - H_W_Z
-
-            # Calculate the squared residual
-            squared_residual = np.sum(residual ** 2)
-
-            print(f"Residual for theta vector at step 5: {squared_residual}")
-
-            # Step 6
-            branch_power_flow = d_E[eppci_obs.data['branch'][:, 0].real.astype(np.int64)] - d_E[
-                eppci_obs.data['branch'][:, 1].real.astype(np.int64)]
-
-            # Step 7
-            branch_mask_without_power_flow = [True if abs(i) > tolerance else False for i in branch_power_flow]
-            branch_idx__without_power_flow = np.flatnonzero(branch_mask_without_power_flow)
-            if not branch_idx__without_power_flow.any():
-                print("No branches without power flow. Stop iterations. ")
-                break
-            branch_without_power_flow = eppci_obs.data['branch'][branch_idx__without_power_flow]
-            print(f"Number of branches without power flow {len(branch_without_power_flow)}. Branches: {branch_idx__without_power_flow}")
-            self.delete_branch(eppci_obs, branch_idx__without_power_flow)
-
-            # Step 8
-            buses_with_p_to_delete = np.unique(np.concatenate((branch_without_power_flow[:, 0], branch_without_power_flow[:, 1])))
-            for bus_idx in buses_with_p_to_delete:
-                self.delete_p_measurement(eppci_obs, int(bus_idx))
-            print(f" Number of power injections to delete {len(buses_with_p_to_delete)}. At buses {buses_with_p_to_delete} ")
-
-            # Step 9 - increase counter and go to step 2
-            current_iteration += 1
-
-        mg = create_graph_from_eppci(eppci_obs)
-        print_connected_components(mg, self._net)
 
     def check_result(self, current_error, cur_it):
         # print output for results
