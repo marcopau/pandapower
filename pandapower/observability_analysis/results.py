@@ -56,6 +56,10 @@ def get_dropped_elements(net: pp.pandapowerNet, eppci: ExtendedPPCI, all_branche
 
 def _map_branches_to_lines(net: pp.pandapowerNet, component_id, component_branches):
     """Assign line branches of a component to the observability structure in the network."""
+
+    if not "trafo" in net._pd2ppc_lookups["branch"]:
+        return
+
     line_index_from, line_index_to = net._pd2ppc_lookups["branch"]["line"]
     lines_eppci_idx = filter(lambda idx: line_index_from <= idx < line_index_to, component_branches)
 
@@ -70,6 +74,9 @@ def _map_branches_to_trafo(net: pp.pandapowerNet, component_id, component_branch
     """
        Assign transformer branches of a component to the observability structure in the network.
     """
+    if not "trafo" in net._pd2ppc_lookups["branch"]:
+        return
+
     trafo_index_from, trafo_index_to = net._pd2ppc_lookups["branch"]["trafo"]
     trafo_eppci_idx = [i - trafo_index_from for i in component_branches if trafo_index_from <= i < trafo_index_to]
 
@@ -84,6 +91,9 @@ def _map_branches_to_trafo3w(net: pp.pandapowerNet, component_id, component_bran
     """
        Assign 3-winding transformer branches of a component to the observability structure in the network.
     """
+    if not "trafo3w" in net._pd2ppc_lookups["branch"]:
+        return
+
     trafo3w_index_from, trafo3w_index_hv, trafo3w_index_mv, trafo3w_index_lv = _get_trafo3w_lookups(net)
 
     trafo3w_hv = [
@@ -112,12 +122,16 @@ def _map_branches_to_trafo3w(net: pp.pandapowerNet, component_id, component_bran
     net._observability_lookup["trafo3w"][list(trafo3w_hv_net.index)] = component_id
 
 
-def _init_observability_lookup(net: pp.pandapowerNet):
+def create_lookup(element):
+    return np.full(max(element.index) + 1, -1, dtype=int) if not element.empty else np.array([], dtype=int)
+
+
+def _init_observability_lookup(net):
     net._observability_lookup = {
-        "line": np.full(max(net.line.index + 1) + 1, -1, dtype=int),
-        "trafo": np.full(max(net.trafo.index + 1) + 1, -1, dtype=int),
-        "trafo3w": np.full(max(net.trafo3w.index + 1) + 1, -1, dtype=int),
-        "bus": np.full(max(net.bus.index + 1) + 1, -1, dtype=int)
+        "line": create_lookup(net.line),
+        "trafo": create_lookup(net.trafo),
+        "trafo3w": create_lookup(net.trafo3w),
+        "bus": create_lookup(net.bus),
     }
 
 
