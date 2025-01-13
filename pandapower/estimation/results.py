@@ -70,6 +70,23 @@ def _extract_result_ppci_to_pp(net, ppc, ppci):
                     net[element_res_est].loc[net[element].loc[:,"bus"]==bus,"p_mw"] = Sinj.real
                     net[element_res_est].loc[net[element].loc[:,"bus"]==bus,"q_mvar"] = Sinj.imag
                     net[element_res_est].loc[net[element].loc[:,"bus"]==bus,"vm_pu"] = net["res_bus_est"].loc[bus,"vm_pu"]
+
+    # write voltage estimation uncertainty results
+    vm_unc = get_values(ppci.std_Vm, net.bus.index.values, mapping_table)
+    net.res_bus_est["vm_pu_unc"] = 300 * vm_unc / net.res_bus_est["vm_pu"]
+    fbus = ppci["branch"][:,0].astype(int)
+    tbus = ppci["branch"][:,1].astype(int)
+    Vb = ppci["bus"][:,9]
+    ifm_unc = ppci.std_Ifm*net.sn_mva/(np.sqrt(3)*Vb[fbus])
+    itm_unc = ppci.std_Itm*net.sn_mva/(np.sqrt(3)*Vb[tbus])
+    fline = net._pd2ppc_lookups["branch"]["line"][0]
+    tline = net._pd2ppc_lookups["branch"]["line"][1]
+    ftrafo = net._pd2ppc_lookups["branch"]["trafo"][0]
+    ttrafo = net._pd2ppc_lookups["branch"]["trafo"][1]
+    net.res_line_est["i_from_unc"] = 300 * ifm_unc[fline:tline] / net.line["max_i_ka"]
+    net.res_line_est["i_to_unc"] = 300 * itm_unc[fline:tline] / net.line["max_i_ka"]
+    net.res_trafo_est["i_hv_unc"] = 300 * ifm_unc[ftrafo:ttrafo] / (net.trafo["sn_mva"]/(net.trafo["vn_hv_kv"]*np.sqrt(3)))
+    net.res_trafo_est["i_lv_unc"] = 300 * itm_unc[ftrafo:ttrafo] / (net.trafo["sn_mva"]/(net.trafo["vn_lv_kv"]*np.sqrt(3)))
     return net
 
 

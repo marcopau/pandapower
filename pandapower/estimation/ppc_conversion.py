@@ -547,6 +547,9 @@ class ExtendedPPCI(UserDict):
         self.non_nan_meas_selector = None
         self.any_i_meas = False
         self.any_degree_meas = False
+        self.std_Vm = None
+        self.std_Ifm = None
+        self.std_Itm = None
 
         # check slack bus
         self.non_slack_buses = np.argwhere(ppci["bus"][:, idx_bus.BUS_TYPE] != 3).ravel()

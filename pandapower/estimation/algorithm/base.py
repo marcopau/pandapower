@@ -80,6 +80,26 @@ class WLSAlgorithm(BaseAlgorithm):
         self.obj_func = None
         logging.basicConfig(level=logging.DEBUG)
 
+    def compute_std_dev_estimates(self, sem, G_m, V):
+        cov_Vpm = inv(G_m)
+        difm_dth, difm_dv, ditm_dth, ditm_dv, _, _, _, _ = sem._dimiabr_dV(V)
+        ifm_jac = np.c_[difm_dth,
+                            difm_dv]
+        itm_jac = np.c_[ditm_dth,
+                            ditm_dv]
+        ifm_jac = ifm_jac[:, self.eppci.delta_v_bus_mask]
+        itm_jac = itm_jac[:, self.eppci.delta_v_bus_mask]
+
+        cov_Ifm = ifm_jac@cov_Vpm@np.transpose(ifm_jac)
+        cov_Itm = itm_jac@cov_Vpm@np.transpose(itm_jac)
+
+        stddev_Vpm = np.sqrt(cov_Vpm.diagonal())
+        stddev_Vm = stddev_Vpm[-len(self.eppci.V):]
+        stddev_Ifm = np.sqrt(np.diag(cov_Ifm))
+        stddev_Itm = np.sqrt(np.diag(cov_Itm))
+
+        return stddev_Vm, stddev_Ifm, stddev_Itm
+
     def estimate(self, eppci: ExtendedPPCI, **kwargs):
         self.initialize(eppci)
         # matrix calculation object
@@ -110,11 +130,11 @@ class WLSAlgorithm(BaseAlgorithm):
                 # gain matrix G_m
                 # G_m = H^t * R^-1 * H
                 G_m = H.T * (r_inv * H)
-                norm_G = norm(G_m, np.inf)
-                norm_invG = norm(inv(G_m), np.inf)
-                cond = norm_G*norm_invG
-                if cond > 10**18:
-                    self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
+                # norm_G = norm(G_m, np.inf)
+                # norm_invG = norm(inv(G_m), np.inf)
+                # cond = norm_G*norm_invG
+                # if cond > 10**18:
+                #     self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
                 # d_E = G_m^-1 * (H' * R^-1 * r)
@@ -152,6 +172,9 @@ class WLSAlgorithm(BaseAlgorithm):
         self.iterations = cur_it
         # self.obj_func = obj_func
         if self.successful:
+            # compute voltage and current magnitude uncertainties
+            V = self.eppci.E2V(E)
+            eppci.std_Vm, eppci.std_Ifm, eppci.std_Itm = self.compute_std_dev_estimates(sem, G_m, V)
             # store variables required for chi^2 and r_N_max test:
             self.R_inv = r_inv.toarray()
             self.Gm = G_m.toarray()
