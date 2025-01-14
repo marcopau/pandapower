@@ -16,6 +16,7 @@ from pandapower.estimation.ppc_conversion import ExtendedPPCI
 from pandapower.pypower.idx_brch import BR_R, BR_X, BR_B, BR_G, SHIFT, TAP
 from pandapower.pypower.idx_brch import branch_cols
 from pandapower.pypower.idx_bus import bus_cols, GS, BS
+from scipy.sparse import csr_matrix, vstack
 
 logger = logging.getLogger(__name__)
 
@@ -188,11 +189,12 @@ class NetworkAnalysisCore:
         """
 
         # Create new rows with pseudo measurements
-        new_jacobian_rows = np.zeros((len(zero_pivots), jacobian.shape[1]))
-        new_jacobian_rows[np.arange(len(zero_pivots)), zero_pivots] = 1
-
+        new_jacobian_rows = csr_matrix(
+            (np.ones(len(zero_pivots)), (np.arange(len(zero_pivots)), zero_pivots)),
+            shape=(len(zero_pivots), jacobian.shape[1])
+        )
         # Stack the new rows with the original matrix
-        jacobian_with_pseudo_meas = np.vstack((jacobian, new_jacobian_rows))
+        jacobian_with_pseudo_meas = vstack([jacobian, new_jacobian_rows])
         logger.info(f"Introduced {len(zero_pivots)} pseudo measurements")
 
         return jacobian_with_pseudo_meas
