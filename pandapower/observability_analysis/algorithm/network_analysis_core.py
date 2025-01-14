@@ -4,11 +4,9 @@
 # Contributions made on 2025.
 
 import logging
-from collections import defaultdict
 from copy import deepcopy
 
 import numpy as np
-from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import spsolve
 
 from pandapower.estimation.idx_brch import Q_FROM, Q_TO, Q_FROM_STD, Q_TO_STD, IA_FROM, IA_FROM_STD, IA_TO, IA_TO_STD, \
@@ -21,34 +19,11 @@ from pandapower.pypower.idx_bus import bus_cols, GS, BS
 
 logger = logging.getLogger(__name__)
 
-import time
-
-tot = defaultdict(int)
-
-def track_execution_time(func):
-    def wrapper(*args, **kwargs):
-        start_time = time.time()  # Record the start time
-        result = func(*args, **kwargs)  # Call the original function
-        end_time = time.time()  # Record the end time
-        execution_time = end_time - start_time
-        print(f"Function '{func.__name__}' executed in {execution_time:.4f} seconds")
-        tot[func.__name__] += execution_time
-        if func.__name__=="fin_func":
-            import json
-            # Save the dictionary to a JSON file
-            with open("stat_time.json", "w") as json_file:
-                json.dump(tot, json_file, indent=4)
-
-        return result  # Return the original result
-
-    return wrapper
-
 
 class NetworkAnalysisCore:
     def __init__(self, eppci: ExtendedPPCI):
         self.eppci = deepcopy(eppci)
 
-    @track_execution_time
     def _clean_not_p_measurements(self):
         ppci = self.eppci.data
 
@@ -81,7 +56,6 @@ class NetworkAnalysisCore:
 
         self.eppci._initialize_meas()
 
-    @track_execution_time
     def _reset_network_values(self):
         """
            Resets network parameters in the eppci data structure to default values.
@@ -100,7 +74,6 @@ class NetworkAnalysisCore:
         self.eppci.data['branch'][:, TAP] = np.ones(len(self.eppci.data['branch'][:, TAP]))
         self.eppci.data['branch'][:, SHIFT] = np.zeros(len(self.eppci.data['branch'][:, SHIFT]))
 
-    @track_execution_time
     def _set_delta_v_bus_selector(self):
         """
         Set selector to work only with dP/dθ part of the Jacobian.
@@ -108,7 +81,6 @@ class NetworkAnalysisCore:
 
         self.eppci.delta_v_bus_selector = np.arange(len(self.eppci.data['bus']))
 
-    @track_execution_time
     def _calculate_branch_power_flow(self, theta_vector: np.ndarray) -> np.ndarray:
         """
         Calculates the power flow across branches based on bus voltage angles.
@@ -129,7 +101,6 @@ class NetworkAnalysisCore:
 
         return theta_diff
 
-    @track_execution_time
     def _validate_solution(self, A: np.ndarray, x: np.ndarray, b: np.ndarray) -> None:
         """
            Checks for NaN values in the solution vector x, and if valid, computes and prints the squared residual.
@@ -151,7 +122,6 @@ class NetworkAnalysisCore:
         squared_residual = np.sum(residual ** 2)
         logger.info(f"Residual for theta vector at step 5: {squared_residual}")
 
-    @track_execution_time
     def _solve_dc_estimator_equation(
             self, jacobian_with_pseudo_meas: np.ndarray, zero_pivots: np.ndarray
     ) -> np.ndarray:
@@ -169,31 +139,19 @@ class NetworkAnalysisCore:
         # Create the measurement vector z
         z = np.zeros(jacobian_with_pseudo_meas.shape[0])
         z[-len(zero_pivots):] = np.arange(len(zero_pivots))
+        # jacobian_with_pseudo_meas = csr_matrix(jacobian_with_pseudo_meas)
 
         # Calculate the product of Jacobian transpose and z
-        h_w_z = np.dot(jacobian_with_pseudo_meas.T, z)  # W is identity, so it's skipped
+        h_w_z = jacobian_with_pseudo_meas.T @ z  # W is identity, so it's skipped
 
         # Compute the gain matrix
-        gain_matrix_with_pseudo_meas = np.dot(
-            jacobian_with_pseudo_meas.T, jacobian_with_pseudo_meas
-        )
-
-        # Log the condition number of the gain matrix
-        # cond = np.linalg.cond(gain_matrix_with_pseudo_meas)
-        # logger.info(f"Condition number of the gain matrix: {cond}")
-
-        # Convert gain matrix to sparse format for efficient solving
-        sparse_gain_matrix = csr_matrix(gain_matrix_with_pseudo_meas)
+        gain_matrix_with_pseudo_meas = jacobian_with_pseudo_meas.T @ jacobian_with_pseudo_meas
 
         # Solve the equation using sparse solver
-        solution = spsolve(sparse_gain_matrix, h_w_z)
-
-        # Validate the solution
-        # self._validate_solution(gain_matrix_with_pseudo_meas, solution, h_w_z)
+        solution = spsolve(gain_matrix_with_pseudo_meas, h_w_z)
 
         return solution
 
-    @track_execution_time
     def _validate_zero_pivots(self, zero_pivots: np.ndarray, N: int) -> bool:
         """
         Validates zero pivots to determine if iterations should stop.
@@ -217,7 +175,6 @@ class NetworkAnalysisCore:
         logger.info(f"Zero pivots detected: {zero_pivots}")
         return False
 
-    @track_execution_time
     def _add_pseudo_meas_to_jacobian(self, jacobian: np.ndarray, zero_pivots: np.ndarray) -> np.ndarray:
         """
         Adds pseudo-measurements to the Jacobian matrix for zero pivots.
