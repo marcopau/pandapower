@@ -90,35 +90,6 @@ class ObservabilityAnalyzer(NetworkAnalysisCore):
 
         return branches_idx_without_power_flow, buses_with_p_to_delete
 
-    def _create_jacobian(self, sem: BaseAlgebra) -> np.ndarray:
-        """
-        Creates the Jacobian matrix.
-
-        This method initializes measurement and voltage selectors for the given algebra object
-        (`sem`) and computes the Jacobian matrix based on the current system state.
-
-        Args:
-            sem (BaseAlgebra): An instance of the algebra class responsible for handling the
-                Jacobian matrix computation and selector management.
-
-        Returns:
-            np.ndarray: The computed Jacobian matrix.
-        """
-
-        # Total number of measurements (buses + branches)
-        num_buses = len(self.eppci.data['bus'])
-        num_branches = len(self.eppci.data['branch'])
-        all_meas_number = num_buses + 2 * num_branches
-
-        # Initialize selectors in the algebra object
-        sem.non_nan_meas_selector = np.arange(all_meas_number)  # Indices for all measurements
-        sem.delta_v_bus_selector = np.arange(num_buses)  # Indices for voltage measurements at buses
-
-        # Compute the Jacobian matrix using the algebra object
-        jacobian = sem.create_hx_jacobian(self.eppci.E)
-
-        return jacobian
-
     def _drop_power_injections(self, buses_with_p_to_delete: np.ndarray):
         self._delete_p_measurement(buses_with_p_to_delete.astype(np.int64))
         logger.info(f"Number of power injections to delete {len(buses_with_p_to_delete)}. At buses {buses_with_p_to_delete} ")
