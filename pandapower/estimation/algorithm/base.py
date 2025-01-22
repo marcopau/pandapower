@@ -82,23 +82,22 @@ class WLSAlgorithm(BaseAlgorithm):
 
     def compute_std_dev_estimates(self, sem, G_m, V):
         cov_Vpm = inv(G_m)
-        difm_dth, difm_dv, ditm_dth, ditm_dv, _, _, _, _ = sem._dimiabr_dV(V)
-        ifm_jac = np.c_[difm_dth,
-                            difm_dv]
-        itm_jac = np.c_[ditm_dth,
-                            ditm_dv]
+        # difm_dth, difm_dv, ditm_dth, ditm_dv, _, _, _, _ = sem._dimiabr_dV(V)
+        difm_dth, difm_dv, _, _, _, _, _, _ = sem._dimiabr_dV(V)
+        ifm_jac = hstack((difm_dth, difm_dv))
+        # itm_jac = hstack((ditm_dth, ditm_dv))
         ifm_jac = ifm_jac[:, self.eppci.delta_v_bus_mask]
-        itm_jac = itm_jac[:, self.eppci.delta_v_bus_mask]
+        # itm_jac = itm_jac[:, self.eppci.delta_v_bus_mask]
 
         cov_Ifm = ifm_jac@cov_Vpm@np.transpose(ifm_jac)
-        cov_Itm = itm_jac@cov_Vpm@np.transpose(itm_jac)
+        # cov_Itm = itm_jac@cov_Vpm@np.transpose(itm_jac)
 
         stddev_Vpm = np.sqrt(cov_Vpm.diagonal())
         stddev_Vm = stddev_Vpm[-len(self.eppci.V):]
-        stddev_Ifm = np.sqrt(np.diag(cov_Ifm))
-        stddev_Itm = np.sqrt(np.diag(cov_Itm))
+        stddev_Ifm = np.sqrt(cov_Ifm.diagonal())
+        # stddev_Itm = np.sqrt(cov_Itm.diagonal())
 
-        return stddev_Vm, stddev_Ifm, stddev_Itm
+        return stddev_Vm, stddev_Ifm
 
     def estimate(self, eppci: ExtendedPPCI, **kwargs):
         self.initialize(eppci)
@@ -174,7 +173,7 @@ class WLSAlgorithm(BaseAlgorithm):
         if self.successful:
             # compute voltage and current magnitude uncertainties
             V = self.eppci.E2V(E)
-            eppci.std_Vm, eppci.std_Ifm, eppci.std_Itm = self.compute_std_dev_estimates(sem, G_m, V)
+            eppci.std_Vm, eppci.std_Ifm = self.compute_std_dev_estimates(sem, G_m, V)
             # store variables required for chi^2 and r_N_max test:
             self.R_inv = r_inv.toarray()
             self.Gm = G_m.toarray()

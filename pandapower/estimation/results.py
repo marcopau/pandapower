@@ -78,15 +78,15 @@ def _extract_result_ppci_to_pp(net, ppc, ppci):
     tbus = ppci["branch"][:,1].astype(int)
     Vb = ppci["bus"][:,9]
     ifm_unc = ppci.std_Ifm*net.sn_mva/(np.sqrt(3)*Vb[fbus])
-    itm_unc = ppci.std_Itm*net.sn_mva/(np.sqrt(3)*Vb[tbus])
+    # itm_unc = ppci.std_Itm*net.sn_mva/(np.sqrt(3)*Vb[tbus])
     fline = net._pd2ppc_lookups["branch"]["line"][0]
     tline = net._pd2ppc_lookups["branch"]["line"][1]
     ftrafo = net._pd2ppc_lookups["branch"]["trafo"][0]
     ttrafo = net._pd2ppc_lookups["branch"]["trafo"][1]
     net.res_line_est["i_from_unc"] = 300 * ifm_unc[fline:tline] / net.line["max_i_ka"]
-    net.res_line_est["i_to_unc"] = 300 * itm_unc[fline:tline] / net.line["max_i_ka"]
+    # net.res_line_est["i_to_unc"] = 300 * itm_unc[fline:tline] / net.line["max_i_ka"]
     net.res_trafo_est["i_hv_unc"] = 300 * ifm_unc[ftrafo:ttrafo] / (net.trafo["sn_mva"]/(net.trafo["vn_hv_kv"]*np.sqrt(3)))
-    net.res_trafo_est["i_lv_unc"] = 300 * itm_unc[ftrafo:ttrafo] / (net.trafo["sn_mva"]/(net.trafo["vn_lv_kv"]*np.sqrt(3)))
+    # net.res_trafo_est["i_lv_unc"] = 300 * itm_unc[ftrafo:ttrafo] / (net.trafo["sn_mva"]/(net.trafo["vn_lv_kv"]*np.sqrt(3)))
     return net
 
 

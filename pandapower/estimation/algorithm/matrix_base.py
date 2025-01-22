@@ -4,7 +4,7 @@
 # and Energy System Technology (IEE), Kassel. All rights reserved.
 
 import numpy as np
-from scipy.sparse import vstack, hstack
+from scipy.sparse import vstack, hstack, eye, csr_matrix
 
 from pandapower.pypower.idx_brch import F_BUS, T_BUS
 from pandapower.pypower.dSbus_dV import dSbus_dV
@@ -122,32 +122,32 @@ class BaseAlgebra:
                           dSf_dv.imag,
                           dSt_dv.imag))
 
-        s_jac = hstack((s_jac_th, s_jac_v)).toarray()
-        vm_jac = np.c_[dvm_dth, dvm_dv]
-        jac = np.r_[s_jac,
-                    vm_jac]
+        s_jac = hstack((s_jac_th, s_jac_v))
+        vm_jac = hstack((dvm_dth, dvm_dv))
+        jac = vstack((s_jac, vm_jac))
 
         # if self.any_i_meas or self.any_degree_meas:
         dva_dth, dva_dv = self._dvabus_dV(V)
-        va_jac = np.c_[dva_dth, dva_dv]
+        va_jac = hstack((dva_dth, dva_dv))
         difm_dth, difm_dv, ditm_dth, ditm_dv,\
             difa_dth, difa_dv, dita_dth, dita_dv = self._dimiabr_dV(V)
-        im_jac_th = np.r_[difm_dth,
-                            ditm_dth]
-        im_jac_v = np.r_[difm_dv,
-                            ditm_dv]
-        ia_jac_th = np.r_[difa_dth,
-                            dita_dth]
-        ia_jac_v = np.r_[difa_dv,
-                            dita_dv]
 
-        im_jac = np.c_[im_jac_th, im_jac_v]
-        ia_jac = np.c_[ia_jac_th, ia_jac_v]
+        im_jac_th = vstack((difm_dth,
+                            ditm_dth))
+        im_jac_v = vstack((difm_dv,
+                            ditm_dv))
+        ia_jac_th = vstack((difa_dth,
+                            dita_dth))
+        ia_jac_v = vstack((difa_dv,
+                            dita_dv))
 
-        jac = np.r_[jac,
+        im_jac = hstack((im_jac_th, im_jac_v))
+        ia_jac = hstack((ia_jac_th, ia_jac_v))
+
+        jac = vstack((jac,
                     va_jac,
                     im_jac,
-                    ia_jac]
+                    ia_jac))
 
         if self.eppci.algorithm == "af-wls":
             p_eq_bal_jac_E1 = hstack((dSbus_dth.real, dSbus_dv.real)).toarray()
@@ -188,18 +188,25 @@ class BaseAlgebra:
 
     @staticmethod
     def _dvmbus_dV(V):
-        dvm_dth, dvm_dv = np.zeros((V.shape[0], V.shape[0])), np.eye(V.shape[0], V.shape[0])
+        V_shape = V.shape[0]
+        dvm_dth = csr_matrix((V_shape, V_shape))  # Sparse zero matrix
+        dvm_dv = eye(V_shape, V_shape, format='csr')
         return dvm_dth, dvm_dv
 
     @staticmethod
     def _dvabus_dV(V):
-        dva_dth, dva_dv = np.eye(V.shape[0], V.shape[0]), np.zeros((V.shape[0], V.shape[0]))
+        # Assuming V is already defined
+        V_shape = V.shape[0]
+
+        # Create the sparse matrices
+        dva_dth = eye(V_shape, V_shape, format='csr')  # Sparse identity matrix
+        dva_dv = csr_matrix((V_shape, V_shape))  # Sparse zero matrix
         return dva_dth, dva_dv
 
     def _dimiabr_dV(self, V):
         # for current we only interest in the magnitude at the moment
         difm_dth, difm_dv, ditm_dth, ditm_dv = dIbr_dV_new(self.eppci['branch'], self.Yf, self.Yt, V)
-        difm_dth, difm_dv, ditm_dth, ditm_dv = map(lambda m: m.toarray(), (difm_dth, difm_dv, ditm_dth, ditm_dv))
+        # difm_dth, difm_dv, ditm_dth, ditm_dv = map(lambda m: m.toarray(), (difm_dth, difm_dv, ditm_dth, ditm_dv))
         difa_dth, difa_dv, dita_dth, dita_dv = 0*difm_dth, 0*difm_dv, 0*ditm_dth, 0*ditm_dv
         # dif_dth, dif_dv, dit_dth, dit_dv, If, It = dIbr_dV(self.eppci['branch'], self.Yf, self.Yt, V)
         # dif_dth, dif_dv, dit_dth, dit_dv = map(lambda m: m.toarray(), (dif_dth, dif_dv, dit_dth, dit_dv))
