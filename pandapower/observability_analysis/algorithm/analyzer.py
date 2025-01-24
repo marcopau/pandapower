@@ -47,8 +47,8 @@ class ObservabilityAnalyzer(NetworkAnalysisCore):
         ppci = self.eppci.data
 
         # Set P measurements and their standard deviations to NaN for the specified buses
-        ppci["bus"][bus_positions, bus_cols + P] = np.NaN
-        ppci["bus"][bus_positions, bus_cols + P_STD] = np.NaN
+        ppci["bus"][bus_positions, bus_cols + P] = np.nan
+        ppci["bus"][bus_positions, bus_cols + P_STD] = np.nan
 
         # Create masks to identify non-NaN P measurements for buses, lines from, and lines to
         p_bus_not_nan = ~np.isnan(ppci["bus"][:, bus_cols + P])

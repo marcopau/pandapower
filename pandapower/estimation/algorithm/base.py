@@ -131,9 +131,9 @@ class WLSAlgorithm(BaseAlgorithm):
                 eppci.update_E(E)
 
                 # log data 
-                # obj_func = (r.T*r_inv*r)[0,0]
-                # self.logger.debug("Current delta_x: {:.7f}".format(current_error))
-                # self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
+                obj_func = (r.T*r_inv*r)[0,0]
+                self.logger.debug("Current delta_x: {:.7f}".format(current_error))
+                self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
 
                 # Restore full weighting matrix with current measurements
                 if cur_it == 0 and eppci.any_i_meas:
