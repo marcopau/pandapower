@@ -36,6 +36,7 @@ def estimate(net, algorithm='wls',
              init='flat', tolerance=1e-6, maximum_iterations=10,
              calculate_voltage_angles=True,
              zero_injection='aux_bus', fuse_buses_with_bb_switch='all',
+             drop_measurements=False,
              **opt_vars):
     """
     Wrapper function for WLS state estimation.
@@ -90,8 +91,8 @@ def estimate(net, algorithm='wls',
     return se.estimate(v_start=v_start, delta_start=delta_start,
                        calculate_voltage_angles=calculate_voltage_angles,
                        zero_injection=zero_injection,
-                       fuse_buses_with_bb_switch=fuse_buses_with_bb_switch, 
-                       algorithm=algorithm, **opt_vars)
+                       fuse_buses_with_bb_switch=fuse_buses_with_bb_switch,
+                       algorithm=algorithm,drop_measurements=drop_measurements, **opt_vars)
 
 
 def remove_bad_data(net, init='flat', tolerance=1e-6, maximum_iterations=10,
@@ -187,7 +188,7 @@ class StateEstimation:
         self.bad_data_present = None
 
     def estimate(self, v_start='flat', delta_start='flat', calculate_voltage_angles=True,
-                 zero_injection=None, fuse_buses_with_bb_switch='all', algorithm='wls', **opt_vars):
+                 zero_injection=None, fuse_buses_with_bb_switch='all', algorithm='wls', drop_measurements=False, **opt_vars):
         """
         The function estimate is the main function of the module. It takes up to three input
         arguments: v_start, delta_start and calculate_voltage_angles. The first two are the initial
@@ -266,8 +267,8 @@ class StateEstimation:
 
         self.net, self.ppc, self.eppci = pp2eppci(self.net, v_start=v_start, delta_start=delta_start,
                                                   calculate_voltage_angles=calculate_voltage_angles,
-                                                  zero_injection=zero_injection, algorithm=algorithm, 
-                                                  ppc=self.ppc, eppci=self.eppci)
+                                                  zero_injection=zero_injection, algorithm=algorithm,
+                                                  ppc=self.ppc, eppci=self.eppci, drop_measurements=drop_measurements)
 
         # Estimate voltage magnitude and angle with the given estimator
         self.eppci = self.solver.estimate(self.eppci, **opt_vars)
@@ -286,7 +287,7 @@ class StateEstimation:
         # if recycle is not wished, reset ppc, ppci
         if not self.recycle:
             self.ppc, self.eppci = None, None
-        
+
         if algorithm == "wls" or algorithm == "af-wls":
             now = datetime.now()
             se_results = {

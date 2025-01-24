@@ -72,7 +72,8 @@ def run_measurement_placement_for_ppnet(
         delta_start='flat',
         algorithm='wls',
         calculate_voltage_angles=True,
-        zero_injection='auto'
+        zero_injection='auto',
+        drop_measurements=False,
 ) -> dict:
     """
     Runs the measurement placement algorithm for a pandapower network.
@@ -107,7 +108,7 @@ def run_measurement_placement_for_ppnet(
     # Convert the pandapower network to the extended power flow data structure
     net, _, eppci = pp2eppci(net, v_start=v_start, delta_start=delta_start,
                              calculate_voltage_angles=calculate_voltage_angles,
-                             zero_injection=zero_injection, algorithm=algorithm,
+                             zero_injection=zero_injection, algorithm=algorithm,drop_measurements=drop_measurements
                              )
 
     # Perform measurement placement on the extended power flow data structure

@@ -153,7 +153,7 @@ def _initialize_voltage(net, init, calculate_voltage_angles):
     return v_start, delta_start
 
 
-def create_active_power_measurements_from_setpoints(net, meas, isolated_buses):
+def create_active_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=False):
     eppci_bus_to_ppnet_map = defaultdict(list)
     for i, v in enumerate(net._pd2ppc_lookups["bus"]):
         if v != -1:
@@ -171,11 +171,24 @@ def create_active_power_measurements_from_setpoints(net, meas, isolated_buses):
 
     candidates_for_setpoints = []
     for ppci_bus_id, ppnet_buses in eppci_bus_to_ppnet_map.items():
-        number_of_measurments = len(set(p_measurements[p_measurements["ppci_index"] == ppci_bus_id].element))
-        number_of_all_ppnet_buses = set(ppnet_buses) - isolated_buses
 
-        if number_of_measurments > 0 and len(number_of_all_ppnet_buses) != number_of_measurments:
-            candidates_for_setpoints.append((ppci_bus_id, number_of_all_ppnet_buses))
+        buses_with_measurments = set(p_measurements[p_measurements["ppci_index"] == ppci_bus_id].element)
+        number_of_ppnet_buses_without_meas = set(ppnet_buses) - isolated_buses - buses_with_measurments
+
+        if len(buses_with_measurments) > 0 and len(number_of_ppnet_buses_without_meas) > 0:
+            candidates_for_setpoints.append((ppci_bus_id, number_of_ppnet_buses_without_meas))
+
+    if drop_measurements is True:
+        for candidate in candidates_for_setpoints:
+            ppnet_buses_non_zero_inj = candidate[1]
+            meas = meas[~(
+                (meas['element'].isin(ppnet_buses_non_zero_inj)
+                 & (meas["measurement_type"] == 'p')
+                 & (meas["element_type"] == 'bus'))
+            )]
+
+        return meas
+
 
     for candidate in candidates_for_setpoints:
         ppci_bus_id = candidate[0]
@@ -209,7 +222,7 @@ def create_active_power_measurements_from_setpoints(net, meas, isolated_buses):
     return meas
 
 
-def create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses):
+def create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=False):
     eppci_bus_to_ppnet_map = defaultdict(list)
     for i, v in enumerate(net._pd2ppc_lookups["bus"]):
         if v != -1:
@@ -227,11 +240,23 @@ def create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses)
 
     candidates_for_setpoints = []
     for ppci_bus_id, ppnet_buses in eppci_bus_to_ppnet_map.items():
-        number_of_measurments = len(set(q_measurements[q_measurements["ppci_index"] == ppci_bus_id].element))
-        number_of_all_ppnet_buses = set(ppnet_buses) - isolated_buses
+        buses_with_measurments = set(q_measurements[q_measurements["ppci_index"] == ppci_bus_id].element)
+        number_of_ppnet_buses_without_meas = set(ppnet_buses) - isolated_buses - buses_with_measurments
 
-        if number_of_measurments > 0 and len(number_of_all_ppnet_buses) != number_of_measurments:
-            candidates_for_setpoints.append((ppci_bus_id, number_of_all_ppnet_buses))
+        if len(buses_with_measurments) > 0 and len(number_of_ppnet_buses_without_meas) > 0:
+            candidates_for_setpoints.append((ppci_bus_id, number_of_ppnet_buses_without_meas))
+
+    if drop_measurements is True:
+        for candidate in candidates_for_setpoints:
+            ppnet_buses_non_zero_inj = candidate[1]
+            meas = meas[~(
+                (meas['element'].isin(ppnet_buses_non_zero_inj)
+                 & (meas["measurement_type"] == 'p')
+                 & (meas["element_type"] == 'bus'))
+            )]
+
+        return meas
+
 
     for candidate in candidates_for_setpoints:
         ppci_bus_id = candidate[0]
@@ -291,7 +316,7 @@ def _init_ppc(net, v_start, delta_start, calculate_voltage_angles):
     return ppc, ppci
 
 
-def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
+def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm, drop_measurements=False):
     """
 
     Add pandapower measurements to the ppci structure by adding new columns
@@ -315,8 +340,8 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
 
     isolated_buses = all_buses - connected_buses
 
-    meas = create_active_power_measurements_from_setpoints(net, meas, isolated_buses)
-    meas = create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses)
+    meas = create_active_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=drop_measurements)
+    meas = create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=drop_measurements)
     net.measurement = meas
 
     meas = net.measurement.copy(deep=True)
@@ -749,7 +774,7 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
 
 def pp2eppci(net, v_start=None, delta_start=None,
              calculate_voltage_angles=True, zero_injection="aux_bus",
-             algorithm='wls', ppc=None, eppci=None):
+             algorithm='wls', ppc=None, eppci=None, drop_measurements=False):
     if isinstance(eppci, ExtendedPPCI):
         eppci.algorithm = algorithm
         eppci.data = _add_measurements_to_ppci(net, eppci.data, zero_injection, algorithm)
@@ -761,7 +786,7 @@ def pp2eppci(net, v_start=None, delta_start=None,
 
         # add measurements to ppci structure
         # Finished converting pandapower network to ppci
-        ppci = _add_measurements_to_ppci(net, ppci, zero_injection, algorithm)
+        ppci = _add_measurements_to_ppci(net, ppci, zero_injection, algorithm, drop_measurements=drop_measurements)
         return net, ppc, ExtendedPPCI(ppci, algorithm)
 
 
