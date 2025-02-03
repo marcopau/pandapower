@@ -1,29 +1,12 @@
 # -*- coding: utf-8 -*-
 import time
-# Copyright (c) 2016-2023 by University of Kassel and Fraunhofer Institute for Energy Economics
-# and Energy System Technology (IEE), Kassel. All rights reserved.
-
-
-from collections import UserDict, defaultdict
-from itertools import chain
+from collections import UserDict
 
 import numpy as np
 import pandas as pd
 
 import pandapower.pypower.idx_bus as idx_bus
 from pandapower.auxiliary import _init_runse_options
-from pandapower.estimation.util import estimate_voltage_vector
-from pandapower.pd2ppc import _pd2ppc
-from pandapower.pf.run_newton_raphson_pf import _run_dc_pf
-from pandapower.pypower.idx_brch import branch_cols
-from pandapower.pypower.idx_bus import bus_cols
-from pandapower.pypower.makeYbus import makeYbus
-
-from pandapower.estimation.idx_bus import (VM, VM_IDX, VM_STD,
-                                           VA, VA_IDX, VA_STD,
-                                           P, P_IDX, P_STD,
-                                           Q, Q_IDX, Q_STD,
-                                           ZERO_INJ_FLAG, bus_cols_se)
 from pandapower.estimation.idx_brch import (P_FROM, P_FROM_IDX, P_FROM_STD,
                                             Q_FROM, Q_FROM_IDX, Q_FROM_STD,
                                             IM_FROM, IM_FROM_IDX, IM_FROM_STD,
@@ -33,6 +16,22 @@ from pandapower.estimation.idx_brch import (P_FROM, P_FROM_IDX, P_FROM_STD,
                                             IM_TO, IM_TO_IDX, IM_TO_STD,
                                             IA_TO, IA_TO_IDX, IA_TO_STD,
                                             branch_cols_se)
+from pandapower.estimation.idx_bus import (VM, VM_IDX, VM_STD,
+                                           VA, VA_IDX, VA_STD,
+                                           P, P_IDX, P_STD,
+                                           Q, Q_IDX, Q_STD,
+                                           ZERO_INJ_FLAG, bus_cols_se)
+from pandapower.estimation.power_measurements import create_active_power_measurements_from_setpoints, \
+    create_reactive_power_measurements_from_setpoints, get_pp_zero_injection_buses
+from pandapower.estimation.util import estimate_voltage_vector
+from pandapower.pd2ppc import _pd2ppc
+from pandapower.pf.run_newton_raphson_pf import _run_dc_pf
+from pandapower.pypower.idx_brch import branch_cols
+from pandapower.pypower.idx_bus import bus_cols
+from pandapower.pypower.makeYbus import makeYbus
+
+# Copyright (c) 2016-2023 by University of Kassel and Fraunhofer Institute for Energy Economics
+# and Energy System Technology (IEE), Kassel. All rights reserved.
 
 try:
     import pandaplan.core.pplog as logging
@@ -154,150 +153,6 @@ def _initialize_voltage(net, init, calculate_voltage_angles):
     return v_start, delta_start
 
 
-def get_eppci_bus_to_ppnet_map(net, isolated_buses):
-    eppci_bus_to_ppnet_map = defaultdict(set)
-    for i, v in enumerate(net._pd2ppc_lookups["bus"]):
-        if v != -1 and i not in isolated_buses:
-            eppci_bus_to_ppnet_map[v].add(i)
-    return eppci_bus_to_ppnet_map
-
-
-def create_measurements_df(elements: pd.Series, values: pd.Series, std_dev: float, measurement_type: str):
-    return pd.DataFrame({
-        'name': f'Setpoint_{measurement_type}_' + elements.astype(str),
-        'side': None,
-        'measurement_type': measurement_type,
-        'element': elements,
-        'element_type': 'bus',
-        'value': values,
-        'std_dev': std_dev
-    })
-
-
-def create_active_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=False):
-    eppci_bus_to_ppnet_map = get_eppci_bus_to_ppnet_map(net, isolated_buses)
-
-    p_measurements = meas[
-        (meas.measurement_type == 'p') &
-        (meas.element_type == 'bus')
-        ]
-
-    p_measurements["ppci_index"] = p_measurements["element"].map(
-        lambda x: net._pd2ppc_lookups["bus"][int(x)]  # pylint: disable=W0212
-    )
-
-    p_grouped = p_measurements.groupby("ppci_index")
-
-    series_dict = dict(p_grouped["element"].nunique())
-
-    p_measurements_map = {
-        ppci_bus_id: set(group.element)
-        for ppci_bus_id, group in p_grouped
-    }
-
-    mismatched_ppci_map = {
-        ppci_bus_id: eppci_bus_to_ppnet_map[ppci_bus_id] - p_measurements_map.get(ppci_bus_id, set())
-        for ppci_bus_id, num_buses in series_dict.items()
-        if num_buses != len(eppci_bus_to_ppnet_map[ppci_bus_id])
-    }
-    candidates_buses = list(chain.from_iterable(mismatched_ppci_map.values()))
-
-    if drop_measurements is True:
-        bus_measurements_to_drop = p_measurements[p_measurements.ppci_index.isin(mismatched_ppci_map.keys())].index
-        meas = meas[~meas.index.isin(bus_measurements_to_drop)]
-        return meas
-
-    load_grouped = net.load.groupby('bus')['p_mw'].sum()
-    sgen_grouped = net.sgen.groupby('bus')['p_mw'].sum()
-    gen_grouped = net.gen.groupby('bus')['p_mw'].sum()
-
-    injections = pd.DataFrame({
-        'load_p_mw': load_grouped,
-        'sgen_p_mw': sgen_grouped,
-        'gens_p_mw': gen_grouped
-    }).fillna(0)  # Fill NaN with 0 for buses with no data in some categories
-
-    injections['total_p_mw'] = injections['load_p_mw'] - injections['sgen_p_mw'] - injections['gens_p_mw']
-
-    filtered_injections = injections.loc[list(candidates_buses), 'total_p_mw'].reset_index()
-
-    new_p_measurements = create_measurements_df(
-        filtered_injections['bus'],
-        filtered_injections['total_p_mw'],
-        30,
-        "p",
-    )
-
-    meas = pd.concat([meas, new_p_measurements], ignore_index=True)
-    return meas
-
-
-def create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=False):
-    eppci_bus_to_ppnet_map = get_eppci_bus_to_ppnet_map(net, isolated_buses)
-
-    q_measurements = meas[
-        (meas.measurement_type == 'q') &
-        (meas.element_type == 'bus')
-        ]
-
-    q_measurements["ppci_index"] = q_measurements["element"].map(
-        lambda x: net._pd2ppc_lookups["bus"][int(x)]  # pylint: disable=W0212
-    )
-
-    q_grouped = q_measurements.groupby("ppci_index")
-
-    series_dict = dict(q_grouped["element"].nunique())
-
-    q_measurements_map = {
-        ppci_bus_id: set(group.element)
-        for ppci_bus_id, group in q_grouped
-    }
-
-    mismatched_ppci_map = {
-        ppci_bus_id: eppci_bus_to_ppnet_map[ppci_bus_id] - q_measurements_map.get(ppci_bus_id, set())
-        for ppci_bus_id, num_buses in series_dict.items()
-        if num_buses != len(eppci_bus_to_ppnet_map[ppci_bus_id])
-    }
-    candidates_buses = list(chain.from_iterable(mismatched_ppci_map.values()))
-
-    if drop_measurements is True:
-        bus_measurements_to_drop = q_measurements[q_measurements.ppci_index.isin(mismatched_ppci_map.keys())].index
-        meas = meas[~meas.index.isin(bus_measurements_to_drop)]
-        return meas
-
-    buses_with_gen = net.gen[net.gen['bus'].isin(candidates_buses)]
-    if not buses_with_gen.empty:
-        ppci_node_buses_with_gen = [net._pd2ppc_lookups["bus"][int(i)] for i in buses_with_gen.bus.unique()]
-        all_net_buses_with_gen = q_measurements[q_measurements.ppci_index.isin(ppci_node_buses_with_gen)].element
-        meas = meas[~(
-            (meas['element'].isin(all_net_buses_with_gen)
-             & (meas["measurement_type"] == 'q')
-             & (meas["element_type"] == 'bus'))
-        )]
-
-    load_grouped = net.load.groupby('bus')['q_mvar'].sum()
-    sgen_grouped = net.sgen.groupby('bus')['q_mvar'].sum()
-
-    injections = pd.DataFrame({
-        'load_q_mvar': load_grouped,
-        'sgen_q_mvar': sgen_grouped,
-    }).fillna(0)  # Fill NaN with 0 for buses with no data in some categories
-
-    injections['total_q_mvar'] = injections['load_q_mvar'] - injections['sgen_q_mvar']
-
-    filtered_injections = injections.loc[list(candidates_buses), 'total_q_mvar'].reset_index()
-
-    new_q_measurements = create_measurements_df(
-        filtered_injections['bus'],
-        filtered_injections['total_q_mvar'],
-        30,
-        "q",
-    )
-
-    meas = pd.concat([meas, new_q_measurements], ignore_index=True)
-    return meas
-
-
 def _init_ppc(net, v_start, delta_start, calculate_voltage_angles):
     # select elements in service and convert pandapower ppc to ppc
     _init_runse_options(net, v_start=v_start, delta_start=delta_start,
@@ -316,20 +171,23 @@ def _init_ppc(net, v_start, delta_start, calculate_voltage_angles):
     return ppc, ppci
 
 
-def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm, drop_measurements=False):
+def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm, setpoint_std_dev: float, drop_measurements=False):
     """
-
     Add pandapower measurements to the ppci structure by adding new columns
     :param net: pandapower net
     :param ppci: generated ppci
     :return: ppc with added columns
     """
-    meas = net.measurement.copy(deep=True)
-
+    st = time.perf_counter()
     isolated_buses = get_pp_zero_injection_buses(net)
-    meas = create_active_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=drop_measurements)
-    meas = create_reactive_power_measurements_from_setpoints(net, meas, isolated_buses, drop_measurements=drop_measurements)
-    net.measurement = meas
+    print(f"get_pp_zero_injection_buses: {time.perf_counter() - st}")
+
+    st = time.perf_counter()
+    create_active_power_measurements_from_setpoints(net, isolated_buses, setpoint_std_dev, drop_measurements=drop_measurements)
+    print(f"create_active_power_measurements_from_setpoints: {time.perf_counter() - st}")
+    st = time.perf_counter()
+    create_reactive_power_measurements_from_setpoints(net, isolated_buses, setpoint_std_dev, drop_measurements=drop_measurements)
+    print(f"create_reactive_power_measurements_from_setpoints: {time.perf_counter() - st}")
 
     meas = net.measurement.copy(deep=True)
 
@@ -609,18 +467,6 @@ def sum_measurements(value, std_dev):
     return sum_values, sum_std_dev
 
 
-def get_pp_zero_injection_buses(net):
-    all_buses = set(net.bus.index)
-
-    connected_buses = set()
-    connected_buses.update(net.load.bus.dropna().unique())
-    connected_buses.update(net.sgen.bus.dropna().unique())
-    connected_buses.update(net.gen.bus.dropna().unique())
-    connected_buses.update(net.ext_grid.bus.dropna().unique())
-    connected_buses.update(net.ward.bus.dropna().unique())
-
-    isolated_buses = all_buses - connected_buses
-    return isolated_buses
 
 
 
@@ -776,10 +622,10 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
 
 def pp2eppci(net, v_start=None, delta_start=None,
              calculate_voltage_angles=True, zero_injection="aux_bus",
-             algorithm='wls', ppc=None, eppci=None, drop_measurements=False):
+             algorithm='wls', ppc=None, eppci=None, setpoint_std_dev=30, drop_measurements=False):
     if isinstance(eppci, ExtendedPPCI):
         eppci.algorithm = algorithm
-        eppci.data = _add_measurements_to_ppci(net, eppci.data, zero_injection, algorithm)
+        eppci.data = _add_measurements_to_ppci(net, eppci.data, zero_injection, algorithm, setpoint_std_dev)
         eppci.update_meas()
         return net, ppc, eppci
     else:
@@ -788,7 +634,7 @@ def pp2eppci(net, v_start=None, delta_start=None,
 
         # add measurements to ppci structure
         # Finished converting pandapower network to ppci
-        ppci = _add_measurements_to_ppci(net, ppci, zero_injection, algorithm, drop_measurements=drop_measurements)
+        ppci = _add_measurements_to_ppci(net, ppci, zero_injection, algorithm, setpoint_std_dev, drop_measurements=drop_measurements)
         return net, ppc, ExtendedPPCI(ppci, algorithm)
 
 
