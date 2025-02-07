@@ -110,11 +110,11 @@ class WLSAlgorithm(BaseAlgorithm):
                 # gain matrix G_m
                 # G_m = H^t * R^-1 * H
                 G_m = H.T * (r_inv * H)
-                norm_G = norm(G_m, np.inf)
-                norm_invG = norm(inv(G_m), np.inf)
-                cond = norm_G*norm_invG
-                if cond > 10**18:
-                    self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
+                # norm_G = norm(G_m, np.inf)
+                # norm_invG = norm(inv(G_m), np.inf)
+                # cond = norm_G*norm_invG
+                # if cond > 10**18:
+                #     self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
                 # d_E = G_m^-1 * (H' * R^-1 * r)

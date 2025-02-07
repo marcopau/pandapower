@@ -125,7 +125,7 @@ class PseudoMeasurementsHandler(NetworkAnalysisCore):
         gain_matrix = jacobian.T @ jacobian
 
         # Step 2: LU decomposition with pivoting
-        P, L, U = lu(gain_matrix)
+        P, L, U = lu(gain_matrix.toarray())
         zero_pivots = np.where(np.abs(np.diag(U)) < tolerance)[0]
         stop_iterations = self._validate_zero_pivots(zero_pivots, N)
         if stop_iterations is True:
