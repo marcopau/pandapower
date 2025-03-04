@@ -45,9 +45,9 @@ def get_non_zero_inj_bus_to_ppnet_map(net, isolated_buses):
     return eppci_bus_to_ppnet_map
 
 
-def _create_measurements_df(elements: pd.Series, values: pd.Series, std_dev: float, measurement_type: str):
+def _create_measurements_df(elements: pd.Series, values: pd.Series, std_dev: float, measurement_type: str, label=""):
     return pd.DataFrame({
-        'name': f'Setpoint_{measurement_type}_' + elements.astype(str),
+        'name': f'Setpoint_{label}_{measurement_type}_' + elements.astype(str),
         'side': None,
         'measurement_type': measurement_type,
         'element': elements,
