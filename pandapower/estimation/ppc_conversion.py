@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-
+import time
 # Copyright (c) 2016-2023 by University of Kassel and Fraunhofer Institute for Energy Economics
 # and Energy System Technology (IEE), Kassel. All rights reserved.
 
 
 from collections import UserDict
+from typing import Optional, Dict
 
 import numpy as np
 import pandas as pd
 
 from pandapower.pypower.idx_bus import BUS_TYPE as pypower_BUS_TYPE, VM as pypower_VM, VA as pypower_VA
-from pandapower.auxiliary import _init_runse_options
+from pandapower.auxiliary import _init_runse_options, pandapowerNet
 from pandapower.estimation.util import estimate_voltage_vector
 from pandapower.pd2ppc import _pd2ppc
 from pandapower.pf.run_newton_raphson_pf import _run_dc_pf
@@ -115,7 +116,7 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     if not meas.query("measurement_type=='i'").empty:
         meas_i_mask = (meas.measurement_type == 'i')
         base_i_ka = ppci["baseMVA"] / net.bus.loc[(meas.side.fillna(meas.element))[meas_i_mask].values,
-                                                  "vn_kv"].values
+        "vn_kv"].values
         meas.loc[meas_i_mask, "value"] /= base_i_ka / np.sqrt(3)
         meas.loc[meas_i_mask, "std_dev"] /= base_i_ka / np.sqrt(3)
 
@@ -148,14 +149,14 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
         num_trafo_is = np.sum(trafo_is_mask)
         trafo_ix_offset = np.sum(br_is_mask[:trafo_ix_start])
         map_trafo = pd.Series(index=net.trafo.index.values[trafo_is_mask],
-                              data=np.arange(trafo_ix_offset, trafo_ix_offset+num_trafo_is))
+                              data=np.arange(trafo_ix_offset, trafo_ix_offset + num_trafo_is))
 
     if not net.trafo3w.empty:
         trafo3w_ix_start = net["_pd2ppc_lookups"]["branch"]["trafo3w"][0]
         num_trafo3w = net.trafo3w.shape[0]
         # Only the HV side branch is needed to evaluate is/os status
         trafo3w_is_mask = br_is_mask[np.arange(trafo3w_ix_start,
-                                               trafo3w_ix_start+num_trafo3w)]
+                                               trafo3w_ix_start + num_trafo3w)]
         num_trafo3w_is = np.sum(trafo3w_is_mask)
 
         trafo3w_ix_offset = np.sum(br_is_mask[:trafo3w_ix_start])
@@ -163,9 +164,9 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
                                     'mv': br_ix + num_trafo3w_is,
                                     'lv': br_ix + 2 * num_trafo3w_is}
                        for trafo3w_ix, br_ix in
-                        zip(net.trafo3w.index.values[trafo3w_is_mask],
-                            np.arange(trafo3w_ix_offset,
-                                      trafo3w_ix_offset+num_trafo3w_is))}
+                       zip(net.trafo3w.index.values[trafo3w_is_mask],
+                           np.arange(trafo3w_ix_offset,
+                                     trafo3w_ix_offset + num_trafo3w_is))}
 
     # set measurements for ppc format
     # add 9 columns to ppc[bus] for Vm, Vm std dev, P, P std dev, Q, Q std dev,
@@ -188,15 +189,19 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
                     element_positions = this_meas_on_bus["element"].values.astype(np.int64)
                     unique_element_positions = np.unique(element_positions)
                     if meas_type in ("v", "va"):
-                        merged_value, merged_std_dev = merge_measurements(this_meas_on_bus.value, this_meas_on_bus.std_dev)
+                        merged_value, merged_std_dev = merge_measurements(this_meas_on_bus.value,
+                                                                          this_meas_on_bus.std_dev)
                         bus_append[bus, BUS_MEAS_PPCI_IX[meas_type]["VALUE"]] = merged_value
                         bus_append[bus, BUS_MEAS_PPCI_IX[meas_type]["STD"]] = merged_std_dev
                         bus_append[bus, BUS_MEAS_PPCI_IX[meas_type]["IDX"]] = this_meas_on_bus.index[0]
                         continue
                     for element in unique_element_positions:
-                        this_meas_on_element = this_meas_on_bus.iloc[np.argwhere(element_positions == element).ravel(), :]
-                        merged_value, merged_std_dev = merge_measurements(this_meas_on_element.value, this_meas_on_element.std_dev)
-                        this_meas_on_bus.loc[this_meas_on_element.index[0], ["value", "std_dev"]] = [merged_value, merged_std_dev]
+                        this_meas_on_element = this_meas_on_bus.iloc[np.argwhere(element_positions == element).ravel(),
+                                               :]
+                        merged_value, merged_std_dev = merge_measurements(this_meas_on_element.value,
+                                                                          this_meas_on_element.std_dev)
+                        this_meas_on_bus.loc[this_meas_on_element.index[0], ["value", "std_dev"]] = [merged_value,
+                                                                                                     merged_std_dev]
                         this_meas_on_bus.loc[this_meas_on_element.index[1:], ["value", "std_dev"]] = [0, 0]
                     sum_value, sum_std_dev = sum_measurements(this_meas_on_bus.value, this_meas_on_bus.std_dev)
                     bus_append[bus, BUS_MEAS_PPCI_IX[meas_type]["VALUE"]] = sum_value
@@ -225,27 +230,29 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
                             np.nan, dtype=ppci["branch"].dtype)
 
     # Add measurements for line and trafo
-    for br_type,  br_map in (("line", map_line), ("trafo", map_trafo)):
+    for br_type, br_map in (("line", map_line), ("trafo", map_trafo)):
         if br_map is None:
             continue
         for meas_type in ("p", "q", "i", "ia"):
             this_meas = meas[(meas.measurement_type == meas_type) &
                              (meas.element_type == br_type) &
-                              meas.element.isin(br_map.index)]
+                             meas.element.isin(br_map.index)]
             if len(this_meas):
                 for br_side in ("f", "t"):
                     meas_this_side = this_meas[(this_meas.side.values.astype(np.int64) ==
-                                                net[br_type][BR_SIDE[br_type][br_side]+"_bus"]
+                                                net[br_type][BR_SIDE[br_type][br_side] + "_bus"]
                                                 [this_meas.element]).values]
                     ix_side = br_map[meas_this_side.element.values].values
                     unique_ix_side = np.unique(ix_side)
                     if len(unique_ix_side) < len(ix_side):
                         for branch in unique_ix_side:
                             this_meas_on_branch = meas_this_side.iloc[np.argwhere(ix_side == branch).ravel(), :]
-                            merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value, this_meas_on_branch.std_dev)
+                            merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value,
+                                                                              this_meas_on_branch.std_dev)
                             branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, br_side)]["VALUE"]] = merged_value
                             branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, br_side)]["STD"]] = merged_std_dev
-                            branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, br_side)]["IDX"]] = this_meas_on_branch.index[0]
+                            branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, br_side)]["IDX"]] = \
+                                this_meas_on_branch.index[0]
                         continue
 
                     branch_append[ix_side, BR_MEAS_PPCI_IX[(meas_type, br_side)]["VALUE"]] = meas_this_side.value.values
@@ -257,7 +264,7 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
         for meas_type in ("p", "q", "i", "ia"):
             this_trafo3w_meas = meas[(meas.measurement_type == meas_type) &
                                      (meas.element_type == "trafo3w") &
-                                      meas.element.isin(map_trafo3w)]
+                                     meas.element.isin(map_trafo3w)]
             if len(this_trafo3w_meas):
                 meas_hv = this_trafo3w_meas[(this_trafo3w_meas.side.values ==
                                              net.trafo3w.hv_bus[this_trafo3w_meas.element]).values]
@@ -274,21 +281,24 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
                 if len(unique_ix_hv) < len(ix_hv):
                     for branch in unique_ix_hv:
                         this_meas_on_branch = meas_hv.iloc[np.argwhere(ix_hv == branch).ravel(), :]
-                        merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value, this_meas_on_branch.std_dev)
+                        merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value,
+                                                                          this_meas_on_branch.std_dev)
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "f")]["VALUE"]] = merged_value
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "f")]["STD"]] = merged_std_dev
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "f")]["IDX"]] = this_meas_on_branch.index[0]
                 if len(unique_ix_mv) < len(ix_mv):
                     for branch in unique_ix_mv:
                         this_meas_on_branch = meas_mv.iloc[np.argwhere(ix_mv == branch).ravel(), :]
-                        merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value, this_meas_on_branch.std_dev)
+                        merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value,
+                                                                          this_meas_on_branch.std_dev)
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "t")]["VALUE"]] = merged_value
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "t")]["STD"]] = merged_std_dev
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "t")]["IDX"]] = this_meas_on_branch.index[0]
                 if len(unique_ix_lv) < len(ix_lv):
                     for branch in unique_ix_lv:
                         this_meas_on_branch = meas_lv.iloc[np.argwhere(ix_lv == branch).ravel(), :]
-                        merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value, this_meas_on_branch.std_dev)
+                        merged_value, merged_std_dev = merge_measurements(this_meas_on_branch.value,
+                                                                          this_meas_on_branch.std_dev)
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "t")]["VALUE"]] = merged_value
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "t")]["STD"]] = merged_std_dev
                         branch_append[branch, BR_MEAS_PPCI_IX[(meas_type, "t")]["IDX"]] = this_meas_on_branch.index[0]
@@ -322,13 +332,13 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
         ppci["clusters"] = cluster_list_tot
         num_clusters = len(cluster_list_tot)
         num_buses = ppci["bus"].shape[0]
-        ppci["rated_power_clusters"] = np.zeros([num_buses, 4*num_clusters])
+        ppci["rated_power_clusters"] = np.zeros([num_buses, 4 * num_clusters])
         for var in ["load", "sgen"]:
             in_service = net[var]["in_service"]
             active_elements = net[var][in_service]
             bus = net._pd2ppc_lookups["bus"][active_elements.bus].astype(int)
-            P = active_elements.p_mw.values/ppci["baseMVA"]
-            Q = active_elements.q_mvar.values/ppci["baseMVA"]
+            P = active_elements.p_mw.values / ppci["baseMVA"]
+            Q = active_elements.q_mvar.values / ppci["baseMVA"]
             if var == 'load':
                 P *= -1
                 Q *= -1
@@ -346,10 +356,415 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
                 bus_i, cluster_i, P_i, Q_i = bus[i], cluster[i], P[i], Q[i]
                 ppci["rated_power_clusters"][bus_i, cluster_i] += P_i
                 ppci["rated_power_clusters"][bus_i, cluster_i + num_clusters] += Q_i
-                ppci["rated_power_clusters"][bus_i, cluster_i + 2*num_clusters] += abs(0.03*P_i)    # std dev cluster variability hardcoded, think how to change it
-                ppci["rated_power_clusters"][bus_i, cluster_i + 3*num_clusters] += abs(0.03*Q_i)    # std dev cluster variability hardcoded, think how to change it
+                ppci["rated_power_clusters"][bus_i, cluster_i + 2 * num_clusters] += abs(
+                    0.03 * P_i)  # std dev cluster variability hardcoded, think how to change it
+                ppci["rated_power_clusters"][bus_i, cluster_i + 3 * num_clusters] += abs(
+                    0.03 * Q_i)  # std dev cluster variability hardcoded, think how to change it
 
     return ppci
+
+
+def _calculate_weighted_measurements(measurements, grouped_column: str):
+    """Calculate weighted measurements."""
+    measurements["weight"] = 1 / (measurements["std_dev"] ** 2)
+    measurements["weighted_value"] = measurements["weight"] * measurements["value"]
+
+    merged_weight = 1 / measurements.groupby(grouped_column)["weight"].sum()
+    merged_value = measurements.groupby(grouped_column)["weighted_value"].sum()
+
+    merged_value = merged_value.to_frame(name="weighted_measurement")
+    merged_value["merged_weight"] = merged_weight
+    merged_value["weighted_measurement"] *= merged_value["merged_weight"]
+    merged_value["merged_weight"] = np.sqrt(merged_weight)
+
+    return merged_value
+
+
+def _add_measurements_to_branch(
+        branch_append: np.ndarray,
+        meas: pd.DataFrame,
+        element_name: str,
+        side_map: Dict[str, str],
+        map_branch: pd.Series,
+) -> None:
+    """
+        Appends weighted branch measurements (power, current, etc.) to the branch_append array.
+
+        Parameters:
+        - branch_append: NumPy array (ppci branch matrix) to append measurement values to.
+        - meas: DataFrame of measurements (must include columns: element, measurement_type, side, etc.).
+        - element_name: Name of the element type, e.g., 'line', 'trafo', 'trafo3w'.
+        - side_map: Mapping of measurement side values to branch side strings (e.g., {'hv': 'from', 'lv': 'to'}).
+        - map_branch: pd.Series mapping element indices to PPCI branch indices.
+    """
+
+    for meas_type in ('p', 'q', 'i', 'ia'):
+        filtered = meas[
+            (meas.measurement_type == meas_type)
+            & (meas.element_type == element_name)
+            & meas.element.isin(map_branch.index)
+            ]
+        if filtered.empty:
+            continue
+
+        for side_val, br_side in side_map.items():
+            side_df = filtered[filtered.side == side_val].copy()
+            if side_df.empty:
+                continue
+
+            # Remap element index → PPCI branch index
+            side_df['element'] = side_df['element'].map(map_branch)
+
+            # Create index map from PPCI index to original measurement index (for later reference)
+            idx_map = (
+                side_df[['element']]
+                .drop_duplicates(subset='element', keep='first')
+                .reset_index()[['element', 'index']]
+                .set_index('element')['index']
+            )
+
+            # Calculate weighted measurement and std dev by branch index
+            merged = _calculate_weighted_measurements(side_df, 'element')
+
+            # Get column indices for VALUE, STD, IDX in branch_append array
+            specs = BR_MEAS_PPCI_IX[(meas_type, br_side)]
+
+            branch_append[merged.index, specs['VALUE']] = merged.weighted_measurement
+            branch_append[merged.index, specs['STD']] = merged.merged_weight
+            branch_append[merged.index, specs['IDX']] = merged.index.map(idx_map)
+
+
+def _get_branch_map(
+        net: pandapowerNet,
+        br_is_mask: np.ndarray,
+        element_type: str,
+) -> pd.Series:
+    """
+    Builds a Series mapping element indices (e.g., line, trafo) to their corresponding PPCI branch indices.
+
+    Parameters:
+    - net: pandapower network object.
+    - br_is_mask: Boolean array (ppci['internal']['branch_is']) indicating which PPCI rows are active.
+    - element_type: Type of branch element (e.g., 'line', 'trafo', 'trafo3w').
+
+    Returns:
+    - map_branch: pd.Series with element indices (from net.<element_type>.index) as index
+                  and PPCI branch indices as values.
+    """
+    # Get the start and end positions in the PPCI branch array for this element type
+    start, end = net._pd2ppc_lookups['branch'][element_type]
+
+    # Extract mask for just the entries related to the current element type
+    mask = br_is_mask[start:end]
+
+    # Compute PPCI offset: number of active branches before the current element type
+    offset = np.sum(br_is_mask[:start])
+
+    # Get the original element indices (e.g., net.line.index) filtered by active mask
+    element_indices = getattr(net, element_type).index.values[mask]
+
+    # Compute PPCI indices corresponding to these elements
+    ppc_indices = np.arange(offset, offset + mask.sum())
+
+    # Return mapping from element index to PPCI branch index
+    return pd.Series(data=ppc_indices, index=element_indices)
+
+
+def _add_measurements_to_line(
+        net: pandapowerNet,
+        branch_append: np.ndarray,
+        meas: pd.DataFrame,
+        br_is_mask: np.ndarray
+) -> None:
+    """
+        Adds line-related measurements (power, current, etc.) to the PPCI branch array.
+
+        Parameters:
+        - net: pandapower network object.
+        - branch_append: NumPy array representing the PPCI branch matrix where measurements are stored.
+        - meas: DataFrame of all measurements (must contain element_type, element, measurement_type, side, etc.).
+        - br_is_mask:  Boolean array (ppci['internal']['branch_is']) indicating the active branches in ppci['branch'].
+    """
+    if net.line.empty:
+        return
+
+    map_branch = _get_branch_map(net, br_is_mask, "line")
+
+    _add_measurements_to_branch(
+        branch_append=branch_append,
+        meas=meas,
+        element_name="line",
+        side_map={"from": "f", "to": "t"},
+        map_branch=map_branch
+    )
+
+
+def _add_measurements_to_trafo(
+        net: pandapowerNet,
+        branch_append: np.ndarray,
+        meas: pd.DataFrame,
+        br_is_mask: np.ndarray
+) -> None:
+    """
+        Adds transformer (2-winding) related measurements to the PPCI branch matrix.
+
+        Parameters:
+        - net: pandapower network object.
+        - branch_append: NumPy array representing the PPCI branch matrix where measurements will be written.
+        - meas: DataFrame containing all measurements (must include columns like element, element_type, side, etc.).
+        - br_is_mask: Boolean array (ppci['internal']['branch_is']) marking active rows in the PPCI branch matrix.
+    """
+
+    if net.trafo.empty:
+        return
+
+    map_branch = _get_branch_map(net, br_is_mask, "trafo")
+
+    _add_measurements_to_branch(
+        branch_append=branch_append,
+        meas=meas,
+        element_name="trafo",
+        side_map={"hv": "f", "lv": "t"},
+        map_branch=map_branch,
+    )
+
+
+def _add_measurements_to_trafo3w(
+        net: pandapowerNet,
+        branch_append: np.ndarray,
+        meas: pd.DataFrame,
+        br_is_mask: np.ndarray
+) -> None:
+    """
+    Adds measurements for 3-winding transformers (HV, MV, LV sides) to the PPCI branch matrix.
+
+    Parameters:
+    - net: pandapower network object.
+    - branch_append: NumPy array representing the PPCI branch matrix where measurements will be stored.
+    - meas: DataFrame of all measurements (includes columns like element, element_type, side, etc.).
+    - br_is_mask: Boolean array (ppci['internal']['branch_is']) marking active rows in the PPCI branch matrix.
+    """
+    if net.trafo3w.empty:
+        return
+
+    # Retrieve starting index for trafo3w entries in the PPCI branch matrix
+    trafo3w_ix_start = net["_pd2ppc_lookups"]["branch"]["trafo3w"][0]
+    num_trafo3w = len(net.trafo3w)
+
+    # Get mask for HV-side branches (used as base reference for all three sides)
+    trafo3w_is_hv = br_is_mask[trafo3w_ix_start: trafo3w_ix_start + num_trafo3w]
+    num_active = trafo3w_is_hv.sum()
+
+    # Compute PPCI offset: number of active branches before trafo3w section
+    offset = np.count_nonzero(br_is_mask[:trafo3w_ix_start])
+
+    # Indices of active 3-winding trafos
+    indices = net.trafo3w.index[trafo3w_is_hv]
+    ppc_indices = np.arange(offset, offset + num_active)
+
+    # Build mapping per side: HV, MV, LV
+    map_branch_by_side = {
+        "hv": pd.Series(data=ppc_indices, index=indices),
+        "mv": pd.Series(data=ppc_indices + num_active, index=indices),
+        "lv": pd.Series(data=ppc_indices + 2 * num_active, index=indices)
+    }
+
+    # Define PPCI side labels for each trafo3w side
+    side_map_labels = {"hv": "f", "mv": "t", "lv": "t"}  # HV is 'from', MV and LV are 'to'
+
+    # Process and store measurements per side
+    for side, map_branch in map_branch_by_side.items():
+        _add_measurements_to_branch(
+            branch_append=branch_append,
+            meas=meas,
+            element_name="trafo3w",
+            side_map={side: side_map_labels[side]},
+            map_branch=map_branch
+        )
+
+
+def _add_measurements_to_bus(meas_bus, bus_append, map_bus):
+    """
+        Aggregate measurements by bus index and append results to bus_append array.
+
+        Parameters:
+        - meas_bus: DataFrame with columns [element, measurement_type, value]
+        - bus_append: NumPy array for storing aggregated measurement values, std devs, and indices
+        - map_bus: dict mapping element IDs to PPCI bus indices
+        """
+
+    # Process voltage (v) and voltage angle (va) measurements
+    for meas_type in ("v", "va"):
+        this_meas = meas_bus[(meas_bus.measurement_type == meas_type)]
+        this_meas["ppci_index"] = this_meas.element.map(lambda x: map_bus[int(x)])
+
+        ind_map = this_meas.drop_duplicates(subset=["ppci_index"], keep="first")
+        ind_map = ind_map.reset_index().set_index("ppci_index")
+
+        meas_merged = _calculate_weighted_measurements(this_meas, "ppci_index")
+        meas_merged["index"] = ind_map["index"]
+
+        bus_append[meas_merged.index, BUS_MEAS_PPCI_IX[meas_type]["VALUE"]] = meas_merged.weighted_measurement
+        bus_append[meas_merged.index, BUS_MEAS_PPCI_IX[meas_type]["STD"]] = meas_merged.merged_weight
+        bus_append[meas_merged.index, BUS_MEAS_PPCI_IX[meas_type]["IDX"]] = meas_merged["index"]
+
+        # Process active (p) and reactive (q) power injections
+        for meas_type in ("p", "q"):
+            this_meas = meas_bus[(meas_bus.measurement_type == meas_type)]
+            this_meas.value *= -1
+
+            if len(this_meas):
+                this_meas["ppci_index"] = this_meas.element.map(lambda x: map_bus[int(x)])
+                ind_map = this_meas.drop_duplicates(subset=["ppci_index"], keep="first")
+                ind_map = ind_map.reset_index().set_index("ppci_index")
+
+                this_meas = _calculate_weighted_measurements(this_meas, "element")
+                this_meas["ppci_index"] = this_meas.index.map(lambda x: map_bus[int(x)])
+
+                sum_values = this_meas.groupby("ppci_index")["weighted_measurement"].sum()
+                this_meas["merged_weight"] = np.square(this_meas["merged_weight"])
+                sum_variance = this_meas.groupby("ppci_index")["merged_weight"].sum()
+                sum_std_dev = np.sqrt(sum_variance)
+
+                merged_value = sum_values.to_frame(name="sum_values")
+                merged_value["sum_std_dev"] = sum_std_dev
+                merged_value["index"] = ind_map["index"]
+
+                bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["VALUE"]] = merged_value.sum_values
+                bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["STD"]] = merged_value.sum_std_dev
+                bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["IDX"]] = merged_value["index"]
+
+
+def _add_rated_power_information_af_wls(net, ppci):
+    cluster_list_loads = net.load["type"].unique()
+    cluster_list_gen = net.sgen["type"].unique()
+    cluster_list_tot = np.concatenate((cluster_list_loads, cluster_list_gen), axis=0)
+    ppci["clusters"] = cluster_list_tot
+    num_clusters = len(cluster_list_tot)
+    num_buses = ppci["bus"].shape[0]
+    ppci["rated_power_clusters"] = np.zeros([num_buses, 4 * num_clusters])
+    for var in ["load", "sgen"]:
+        in_service = net[var]["in_service"]
+        active_elements = net[var][in_service]
+        bus = net._pd2ppc_lookups["bus"][active_elements.bus].astype(int)
+        P = active_elements.p_mw.values / ppci["baseMVA"]
+        Q = active_elements.q_mvar.values / ppci["baseMVA"]
+        if var == 'load':
+            P *= -1
+            Q *= -1
+        cluster = active_elements.type.values
+        if (bus >= ppci["bus"].shape[0]).any():
+            std_logger.warning("Loads or sgen defined in pp-grid do not exist in ppci, will be deleted!")
+            P = P[bus < ppci["bus"].shape[0]]
+            Q = Q[bus < ppci["bus"].shape[0]]
+            cluster = cluster[bus < ppci["bus"].shape[0]]
+            bus = bus[bus < ppci["bus"].shape[0]]
+        for k in range(num_clusters):
+            cluster[cluster == cluster_list_tot[k]] = k
+        cluster = cluster.astype(int)
+        for i in range(len(P)):
+            bus_i, cluster_i, P_i, Q_i = bus[i], cluster[i], P[i], Q[i]
+            ppci["rated_power_clusters"][bus_i, cluster_i] += P_i
+            ppci["rated_power_clusters"][bus_i, cluster_i + num_clusters] += Q_i
+            ppci["rated_power_clusters"][bus_i, cluster_i + 2 * num_clusters] += abs(
+                0.03 * P_i)  # std dev cluster variability hardcoded, think how to change it
+            ppci["rated_power_clusters"][bus_i, cluster_i + 3 * num_clusters] += abs(
+                0.03 * Q_i)  # std dev cluster variability hardcoded, think how to change it
+
+
+def _add_measurements_to_ppci_v2(net, ppci, zero_injection, algorithm):
+    """
+       Add measurement data from pandapower to the internal ppci structure.
+       Extends ppci with additional columns for measurement values, standard deviations, and indices.
+
+       Parameters:
+       - net: pandapower net object
+       - ppci: internal ppci dictionary (result of _pd2ppc)
+       - zero_injection: bool or dict indicating whether/where to add zero injection measurements
+       - algorithm: estimator algorithm name ('af-wls')
+
+       Returns:
+       - ppci: updated ppci dictionary with additional measurement data columns
+    """
+    meas = net.measurement.copy(deep=True)
+    if meas.empty:
+        raise Exception("No measurements are available in pandapower Network! Abort estimation!")
+
+    # Convert power measurements (p, q) to per unit (p.u.)
+    meas.loc[meas.measurement_type == "p", ["value", "std_dev"]] /= ppci["baseMVA"]
+    meas.loc[meas.measurement_type == "q", ["value", "std_dev"]] /= ppci["baseMVA"]
+
+    # Convert current (i) measurements to p.u.
+    i_meas = meas.query("measurement_type=='i'")
+    if not i_meas.empty:
+        # Convert side from string to bus id
+        i_meas["side"] = i_meas.apply(lambda row:
+                                      net['line'].at[row["element"], row["side"] + "_bus"] if
+                                      row["side"] in ("from", "to") else
+                                      net[row["element_type"]].at[row["element"], row["side"] + '_bus'] if
+                                      row["side"] in ("hv", "mv", "lv") else row["side"], axis=1)
+        base_i_ka = ppci["baseMVA"] / i_meas.side.map(net.bus.vn_kv)
+        meas.loc[i_meas.index, "value"] /= base_i_ka / np.sqrt(3)
+        meas.loc[i_meas.index, "std_dev"] /= base_i_ka / np.sqrt(3)
+
+    # Convert angle measurements (ia, va) from degrees to radians
+    meas_dg_mask = (meas.measurement_type == 'ia') | (meas.measurement_type == 'va')
+    if not meas[meas_dg_mask].empty:
+        meas.loc[meas_dg_mask, "value"] = np.deg2rad(meas.loc[meas_dg_mask, "value"])
+        meas.loc[meas_dg_mask, "std_dev"] = np.deg2rad(meas.loc[meas_dg_mask, "std_dev"])
+
+    # Get bus mapping from pandapower to ppc index
+    map_bus = net["_pd2ppc_lookups"]["bus"]
+    meas_bus = meas[(meas['element_type'] == 'bus')]
+
+    # Drop invalid bus measurements (those that map outside the ppci bus array)
+    if (map_bus[meas_bus['element'].values.astype(np.int64)] >= ppci["bus"].shape[0]).any():
+        std_logger.warning("Measurement defined in pp-grid does not exist in ppci, will be deleted!")
+        meas_bus = meas_bus[map_bus[meas_bus['element'].values.astype(np.int64)] < ppci["bus"].shape[0]]
+
+    # Create empty append array for bus measurements
+    bus_append = np.full((ppci["bus"].shape[0], bus_cols_se), np.nan, dtype=ppci["bus"].dtype)
+
+    # Add bus measurements (v, va, p, q)
+    _add_measurements_to_bus(meas_bus, bus_append, map_bus)
+
+    # Add zero injection measurements if specified
+    bus_append = _add_zero_injection(net, ppci, bus_append, zero_injection)
+
+    # Add virtual measurements for artificial buses (from open line switches)
+    new_in_line_buses = np.setdiff1d(np.arange(ppci["bus"].shape[0]), map_bus[map_bus >= 0])
+    bus_append[new_in_line_buses, 2] = 0.
+    bus_append[new_in_line_buses, 3] = 1e-6
+    bus_append[new_in_line_buses, 4] = 0.
+    bus_append[new_in_line_buses, 5] = 1e-6
+
+    # Create empty append array for branch measurements
+    branch_append = np.full((ppci["branch"].shape[0], branch_cols_se), np.nan, dtype=ppci["branch"].dtype)
+    br_is_mask = ppci['internal']['branch_is']
+
+    # Add line, trafo, and trafo3w measurements
+    _add_measurements_to_line(net, branch_append, meas, br_is_mask)
+    _add_measurements_to_trafo(net, branch_append, meas, br_is_mask)
+    _add_measurements_to_trafo3w(net, branch_append, meas, br_is_mask)
+
+    # Integrate new measurement columns into ppci bus matrix
+    if ppci["bus"].shape[1] == bus_cols:
+        ppci["bus"] = np.hstack((ppci["bus"], bus_append))
+    else:
+        ppci["bus"][:, bus_cols: bus_cols + bus_cols_se] = bus_append
+
+    # Integrate new measurement columns into ppci branch matrix
+    if ppci["branch"].shape[1] == branch_cols:
+        ppci["branch"] = np.hstack((ppci["branch"], branch_append))
+    else:
+        ppci["branch"][:, branch_cols: branch_cols + branch_cols_se] = branch_append
+
+    # Add rated power information needed for AF-WLS estimator (if applicable)
+    if algorithm == 'af-wls':
+        _add_rated_power_information_af_wls(net, ppci)
+
+    return ppci
+
 
 def merge_measurements(value, std_dev):
     weight = np.divide(1, np.square(std_dev))
@@ -358,13 +773,15 @@ def merge_measurements(value, std_dev):
     weighted_value = np.multiply(value, weight)
     merged_value = np.multiply(weighted_value.sum(), merged_variance)
     return merged_value, merged_std_dev
-    
+
+
 def sum_measurements(value, std_dev):
     sum_values = value.values.sum()
     variance = np.square(std_dev.values)
     sum_variance = variance.sum()
     sum_std_dev = np.sqrt(sum_variance)
     return sum_values, sum_std_dev
+
 
 def _add_zero_injection(net, ppci, bus_append, zero_injection):
     """
@@ -439,27 +856,28 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                         ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO]
                         )).real.astype(np.float64)
     imag_meas = np.concatenate((np.zeros(sum(p_bus_not_nan)),
-                               np.zeros(sum(p_line_f_not_nan)),
-                               np.zeros(sum(p_line_t_not_nan)),
-                               np.zeros(sum(q_bus_not_nan)),
-                               np.zeros(sum(q_line_f_not_nan)),
-                               np.zeros(sum(q_line_t_not_nan)),
-                               np.zeros(sum(v_bus_not_nan)),
-                               np.zeros(sum(v_degree_bus_not_nan)),
-                               np.ones(sum(i_line_f_not_nan)),
-                               np.ones(sum(i_line_t_not_nan)),
-                               np.zeros(sum(i_degree_line_f_not_nan)),
-                               np.zeros(sum(i_degree_line_t_not_nan))
-                               )).astype(bool)
+                                np.zeros(sum(p_line_f_not_nan)),
+                                np.zeros(sum(p_line_t_not_nan)),
+                                np.zeros(sum(q_bus_not_nan)),
+                                np.zeros(sum(q_line_f_not_nan)),
+                                np.zeros(sum(q_line_t_not_nan)),
+                                np.zeros(sum(v_bus_not_nan)),
+                                np.zeros(sum(v_degree_bus_not_nan)),
+                                np.ones(sum(i_line_f_not_nan)),
+                                np.ones(sum(i_line_t_not_nan)),
+                                np.zeros(sum(i_degree_line_f_not_nan)),
+                                np.zeros(sum(i_degree_line_t_not_nan))
+                                )).astype(bool)
     if ppci.algorithm == "af-wls":
         balance_eq_meas = np.zeros(ppci["rated_power_clusters"].shape[0]).astype(np.float64)
-        af_vmeas = 0.4*np.ones(len(ppci["clusters"]))
-        z = np.concatenate((z, balance_eq_meas[ppci.non_slack_bus_mask], balance_eq_meas[ppci.non_slack_bus_mask], af_vmeas))
+        af_vmeas = 0.4 * np.ones(len(ppci["clusters"]))
+        z = np.concatenate(
+            (z, balance_eq_meas[ppci.non_slack_bus_mask], balance_eq_meas[ppci.non_slack_bus_mask], af_vmeas))
         imag_meas = np.concatenate((imag_meas,
-                                    np.zeros(2*balance_eq_meas[ppci.non_slack_bus_mask].shape[0]),
+                                    np.zeros(2 * balance_eq_meas[ppci.non_slack_bus_mask].shape[0]),
                                     np.zeros(af_vmeas.shape[0]))).astype(bool)
     idx_non_imeas = np.flatnonzero(~imag_meas)
-    
+
     if not update_meas_only:
         # conserve the pandapower indices of measurements in the ppci order
         pp_meas_indices = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_IDX],
@@ -503,15 +921,20 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                     i_degree_line_t_not_nan])
         any_i_meas = np.any(np.r_[i_line_f_not_nan, i_line_t_not_nan])
         any_degree_meas = np.any(np.r_[v_degree_bus_not_nan,
-                                       i_degree_line_f_not_nan,
-                                       i_degree_line_t_not_nan])
+        i_degree_line_f_not_nan,
+        i_degree_line_t_not_nan])
         if ppci.algorithm == "af-wls":
             num_clusters = len(ppci["clusters"])
-            P_balance_dev_std = np.sqrt(np.sum(np.square(ppci["rated_power_clusters"][:,2*num_clusters:3*num_clusters]),axis=1))
-            Q_balance_dev_std = np.sqrt(np.sum(np.square(ppci["rated_power_clusters"][:,3*num_clusters:4*num_clusters]),axis=1))
-            af_vmeas_dev_std = 0.15*np.ones(len(ppci["clusters"]))
-            r_cov = np.concatenate((r_cov, P_balance_dev_std[ppci.non_slack_bus_mask], Q_balance_dev_std[ppci.non_slack_bus_mask], af_vmeas_dev_std))
-            meas_mask = np.concatenate((meas_mask, ppci.non_slack_bus_mask, ppci.non_slack_bus_mask, np.ones(len(ppci["clusters"]))))
+            P_balance_dev_std = np.sqrt(
+                np.sum(np.square(ppci["rated_power_clusters"][:, 2 * num_clusters:3 * num_clusters]), axis=1))
+            Q_balance_dev_std = np.sqrt(
+                np.sum(np.square(ppci["rated_power_clusters"][:, 3 * num_clusters:4 * num_clusters]), axis=1))
+            af_vmeas_dev_std = 0.15 * np.ones(len(ppci["clusters"]))
+            r_cov = np.concatenate(
+                (r_cov, P_balance_dev_std[ppci.non_slack_bus_mask], Q_balance_dev_std[ppci.non_slack_bus_mask],
+                 af_vmeas_dev_std))
+            meas_mask = np.concatenate(
+                (meas_mask, ppci.non_slack_bus_mask, ppci.non_slack_bus_mask, np.ones(len(ppci["clusters"]))))
 
         return z, pp_meas_indices, r_cov, meas_mask, any_i_meas, any_degree_meas, idx_non_imeas
     else:
@@ -532,8 +955,32 @@ def pp2eppci(net, v_start=None, delta_start=None,
 
         # add measurements to ppci structure
         # Finished converting pandapower network to ppci
+        st = time.perf_counter()
         ppci = _add_measurements_to_ppci(net, ppci, zero_injection, algorithm)
-        return net, ppc, ExtendedPPCI(ppci, algorithm)
+        print(f"pp2eppci {time.perf_counter() - st:.2f} seconds")
+        res_time = time.perf_counter() - st
+        return net, ppc, ExtendedPPCI(ppci, algorithm), res_time
+
+
+def pp2eppci_v2(net, v_start=None, delta_start=None,
+                calculate_voltage_angles=True, zero_injection="aux_bus",
+                algorithm='wls', ppc=None, eppci=None):
+    if isinstance(eppci, ExtendedPPCI):
+        eppci.algorithm = algorithm
+        eppci.data = _add_measurements_to_ppci_v2(net, eppci.data, zero_injection, algorithm)
+        eppci.update_meas()
+        return net, ppc, eppci
+    else:
+        # initialize ppc
+        ppc, ppci = _init_ppc(net, v_start, delta_start, calculate_voltage_angles)
+
+        # add measurements to ppci structure
+        # Finished converting pandapower network to ppci
+        st = time.perf_counter()
+        ppci = _add_measurements_to_ppci_v2(net, ppci, zero_injection, algorithm)
+        print(f"pp2eppci_v2 {time.perf_counter() - st:.2f} seconds")
+        res_time = time.perf_counter() - st
+        return net, ppc, ExtendedPPCI(ppci, algorithm),res_time
 
 
 class ExtendedPPCI(UserDict):
@@ -556,7 +1003,7 @@ class ExtendedPPCI(UserDict):
         self.non_slack_bus_mask = (ppci['bus'][:, pypower_BUS_TYPE] != 3).ravel()
         self.num_non_slack_bus = np.sum(self.non_slack_bus_mask)
         self.delta_v_bus_mask = np.r_[self.non_slack_bus_mask,
-                                      np.ones(self.non_slack_bus_mask.shape[0], dtype=bool)].ravel()
+        np.ones(self.non_slack_bus_mask.shape[0], dtype=bool)].ravel()
         self.delta_v_bus_selector = np.flatnonzero(self.delta_v_bus_mask)
 
         # Iniialize measurements 
@@ -570,12 +1017,12 @@ class ExtendedPPCI(UserDict):
         self.delta = self.delta_init.copy()
         self.E = self.E_init.copy()
         if algorithm == "af-wls":
-            self.E = np.concatenate((self.E, np.full(ppci["clusters"].shape,0.5)))
+            self.E = np.concatenate((self.E, np.full(ppci["clusters"].shape, 0.5)))
 
     def _initialize_meas(self):
         # calculate relevant vectors from ppci measurements
-        self.z, self.pp_meas_indices, self.r_cov, self.non_nan_meas_mask,\
-            self.any_i_meas, self.any_degree_meas, self.idx_non_imeas =\
+        self.z, self.pp_meas_indices, self.r_cov, self.non_nan_meas_mask, \
+            self.any_i_meas, self.any_degree_meas, self.idx_non_imeas = \
             _build_measurement_vectors(self, update_meas_only=False)
         self.non_nan_meas_selector = np.flatnonzero(self.non_nan_meas_mask)
 
@@ -587,7 +1034,7 @@ class ExtendedPPCI(UserDict):
         return self.v * np.exp(1j * self.delta)
 
     def reset(self):
-        self.v, self.delta, self.E =\
+        self.v, self.delta, self.E = \
             self.v_init.copy(), self.delta_init.copy(), self.E_init.copy()
 
     def update_E(self, E):
