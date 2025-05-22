@@ -321,6 +321,10 @@ def _add_measurements_to_bus(meas_bus, bus_append, map_bus):
     # Process voltage (v) and voltage angle (va) measurements
     for meas_type in ("v", "va"):
         this_meas = meas_bus[(meas_bus.measurement_type == meas_type)]
+
+        if this_meas.empty:
+            continue
+
         this_meas["ppci_index"] = this_meas.element.map(lambda x: map_bus[int(x)])
 
         ind_map = this_meas.drop_duplicates(subset=["ppci_index"], keep="first")
@@ -333,31 +337,33 @@ def _add_measurements_to_bus(meas_bus, bus_append, map_bus):
         bus_append[meas_merged.index, BUS_MEAS_PPCI_IX[meas_type]["STD"]] = meas_merged.merged_weight
         bus_append[meas_merged.index, BUS_MEAS_PPCI_IX[meas_type]["IDX"]] = meas_merged["index"]
 
-        # Process active (p) and reactive (q) power injections
-        for meas_type in ("p", "q"):
-            this_meas = meas_bus[(meas_bus.measurement_type == meas_type)]
-            this_meas.value *= -1
+    # Process active (p) and reactive (q) power injections
+    for meas_type in ("p", "q"):
+        this_meas = meas_bus[(meas_bus.measurement_type == meas_type)]
+        this_meas.value *= -1
 
-            if len(this_meas):
-                this_meas["ppci_index"] = this_meas.element.map(lambda x: map_bus[int(x)])
-                ind_map = this_meas.drop_duplicates(subset=["ppci_index"], keep="first")
-                ind_map = ind_map.reset_index().set_index("ppci_index")
+        if this_meas.empty:
+            continue
 
-                this_meas = _calculate_weighted_measurements(this_meas, "element")
-                this_meas["ppci_index"] = this_meas.index.map(lambda x: map_bus[int(x)])
+        this_meas["ppci_index"] = this_meas.element.map(lambda x: map_bus[int(x)])
+        ind_map = this_meas.drop_duplicates(subset=["ppci_index"], keep="first")
+        ind_map = ind_map.reset_index().set_index("ppci_index")
 
-                sum_values = this_meas.groupby("ppci_index")["weighted_measurement"].sum()
-                this_meas["merged_weight"] = np.square(this_meas["merged_weight"])
-                sum_variance = this_meas.groupby("ppci_index")["merged_weight"].sum()
-                sum_std_dev = np.sqrt(sum_variance)
+        this_meas = _calculate_weighted_measurements(this_meas, "element")
+        this_meas["ppci_index"] = this_meas.index.map(lambda x: map_bus[int(x)])
 
-                merged_value = sum_values.to_frame(name="sum_values")
-                merged_value["sum_std_dev"] = sum_std_dev
-                merged_value["index"] = ind_map["index"]
+        sum_values = this_meas.groupby("ppci_index")["weighted_measurement"].sum()
+        this_meas["merged_weight"] = np.square(this_meas["merged_weight"])
+        sum_variance = this_meas.groupby("ppci_index")["merged_weight"].sum()
+        sum_std_dev = np.sqrt(sum_variance)
 
-                bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["VALUE"]] = merged_value.sum_values
-                bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["STD"]] = merged_value.sum_std_dev
-                bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["IDX"]] = merged_value["index"]
+        merged_value = sum_values.to_frame(name="sum_values")
+        merged_value["sum_std_dev"] = sum_std_dev
+        merged_value["index"] = ind_map["index"]
+
+        bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["VALUE"]] = merged_value.sum_values
+        bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["STD"]] = merged_value.sum_std_dev
+        bus_append[merged_value.index, BUS_MEAS_PPCI_IX[meas_type]["IDX"]] = merged_value["index"]
 
 
 def _add_rated_power_information_af_wls(net, ppci):
