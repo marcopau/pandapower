@@ -117,7 +117,7 @@ def _add_measurements_to_branch(
 
         Parameters:
         - branch_append: NumPy array (ppci branch matrix) to append measurement values to.
-        - meas: DataFrame of measurements (must include columns: element, measurement_type, side, etc.).
+        - meas: DataFrame of measurements.
         - element_name: Name of the element type, e.g., 'line', 'trafo', 'trafo3w'.
         - side_map: Mapping of measurement side values to branch side strings (e.g., {'hv': 'from', 'lv': 'to'}).
         - map_branch: pd.Series mapping element indices to PPCI branch indices.
@@ -207,7 +207,7 @@ def _add_measurements_to_line(
         Parameters:
         - net: pandapower network object.
         - branch_append: NumPy array representing the PPCI branch matrix where measurements are stored.
-        - meas: DataFrame of all measurements (must contain element_type, element, measurement_type, side, etc.).
+        - meas: DataFrame of measurements.
         - br_is_mask:  Boolean array (ppci['internal']['branch_is']) indicating the active branches in ppci['branch'].
     """
     if net.line.empty:
@@ -236,7 +236,7 @@ def _add_measurements_to_trafo(
         Parameters:
         - net: pandapower network object.
         - branch_append: NumPy array representing the PPCI branch matrix where measurements will be written.
-        - meas: DataFrame containing all measurements (must include columns like element, element_type, side, etc.).
+        - meas: DataFrame containing measurements.
         - br_is_mask: Boolean array (ppci['internal']['branch_is']) marking active rows in the PPCI branch matrix.
     """
 
@@ -266,7 +266,7 @@ def _add_measurements_to_trafo3w(
     Parameters:
     - net: pandapower network object.
     - branch_append: NumPy array representing the PPCI branch matrix where measurements will be stored.
-    - meas: DataFrame of all measurements (includes columns like element, element_type, side, etc.).
+    - meas: DataFrame of measurements.
     - br_is_mask: Boolean array (ppci['internal']['branch_is']) marking active rows in the PPCI branch matrix.
     """
     if net.trafo3w.empty:
