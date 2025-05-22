@@ -80,7 +80,7 @@ class WLSAlgorithm(BaseAlgorithm):
         self.obj_func = None
         logging.basicConfig(level=logging.DEBUG)
 
-    def estimate(self, eppci: ExtendedPPCI, **kwargs):
+    def estimate(self, eppci: ExtendedPPCI, debug_mode=False, **kwargs):
         self.initialize(eppci)
         # matrix calculation object
         sem = BaseAlgebra(eppci)
@@ -110,11 +110,13 @@ class WLSAlgorithm(BaseAlgorithm):
                 # gain matrix G_m
                 # G_m = H^t * R^-1 * H
                 G_m = H.T * (r_inv * H)
-                norm_G = norm(G_m, np.inf)
-                norm_invG = norm(inv(G_m), np.inf)
-                cond = norm_G*norm_invG
-                if cond > 10**18:
-                    self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
+
+                if debug_mode:
+                    norm_G = norm(G_m, np.inf)
+                    norm_invG = norm(inv(G_m), np.inf)
+                    cond = norm_G*norm_invG
+                    if cond > 10**18:
+                        self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
                 # d_E = G_m^-1 * (H' * R^-1 * r)
@@ -130,10 +132,10 @@ class WLSAlgorithm(BaseAlgorithm):
                 E += d_E.ravel()
                 eppci.update_E(E)
 
-                # log data 
-                # obj_func = (r.T*r_inv*r)[0,0]
-                # self.logger.debug("Current delta_x: {:.7f}".format(current_error))
-                # self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
+                if debug_mode:
+                    obj_func = (r.T*r_inv*r)[0,0]
+                    self.logger.debug("Current delta_x: {:.7f}".format(current_error))
+                    self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
 
                 # Restore full weighting matrix with current measurements
                 if cur_it == 0 and eppci.any_i_meas:
@@ -150,7 +152,8 @@ class WLSAlgorithm(BaseAlgorithm):
         # check if the estimation is successfull
         self.check_result(current_error, cur_it)
         self.iterations = cur_it
-        # self.obj_func = obj_func
+        if debug_mode: 
+            self.obj_func = obj_func
         if self.successful:
             # store variables required for chi^2 and r_N_max test:
             self.R_inv = r_inv.toarray()
@@ -287,9 +290,8 @@ class AFWLSAlgorithm(BaseAlgorithm):
         self.hx = None
         self.iterations = None
         self.obj_func = None
-        logging.basicConfig(level=logging.DEBUG)
 
-    def estimate(self, eppci: ExtendedPPCI, **kwargs):
+    def estimate(self, eppci: ExtendedPPCI, debug_mode=False, **kwargs):
         self.initialize(eppci)
         # matrix calculation object
         sem = BaseAlgebra(eppci)
@@ -317,11 +319,12 @@ class AFWLSAlgorithm(BaseAlgorithm):
 
                 # gain matrix G_m
                 G_m = H.T * (r_inv * H)
-                norm_G = norm(G_m, np.inf)
-                norm_invG = norm(inv(G_m), np.inf)
-                cond = norm_G*norm_invG
-                if cond > 10**18:
-                    self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
+                if debug_mode: 
+                    norm_G = norm(G_m, np.inf)
+                    norm_invG = norm(inv(G_m), np.inf)
+                    cond = norm_G*norm_invG
+                    if cond > 10**18:
+                        self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
                 d_E = spsolve(G_m, H.T * (r_inv * r))
@@ -331,9 +334,10 @@ class AFWLSAlgorithm(BaseAlgorithm):
 
                 # log data 
                 current_error = np.max(np.abs(d_E))
-                # obj_func = (r.T*r_inv*r)[0,0]
-                # self.logger.debug("Current delta_x: {:.7f}".format(current_error))
-                # self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
+                if debug_mode:
+                    obj_func = (r.T*r_inv*r)[0,0]
+                    self.logger.debug("Current delta_x: {:.7f}".format(current_error))
+                    self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
 
                 # Restore full weighting matrix
                 if cur_it == 0 and eppci.any_i_meas:
@@ -350,7 +354,8 @@ class AFWLSAlgorithm(BaseAlgorithm):
         # check if the estimation is successfull
         self.check_result(current_error, cur_it)
         self.iterations = cur_it
-        # self.obj_func = obj_func
+        if debug_mode:
+            self.obj_func = obj_func
         if self.successful:
             # store variables required for chi^2 and r_N_max test:
             self.R_inv = r_inv.toarray()
