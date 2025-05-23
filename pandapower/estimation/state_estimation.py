@@ -56,10 +56,13 @@ def estimate(net, algorithm='wls',
                 to identify zero injection bus, with 'wls_estimator' virtual measurements will be added, with \
                 'wls_estimator with zero constraints' the buses will be handled as constraints
 
-                - "auto": all bus without p,q measurement, without p, q value (load, sgen...) and aux buses will be \
-                        identified as zero injection bus
-                - "aux_bus": only aux bus will be identified as zero injection bus
                 - None: no bus will be identified as zero injection bus
+                - "aux_bus": only aux bus will be identified as zero injection bus
+                - "no_inj_bus": aux bus and bus without p,q measurement and without any connected injection (load, sgen...) \
+                        will be identified as zero injection bus
+                - "zero_pwr_bus": aux bus and all bus without p,q measurement that have either no connected injection \
+                        (load, sgen...) or a connected injection (load, sgen...) equal to zero will be identified as \
+                        zero injection bus
                 - iterable: the iterable should contain index of the zero injection bus and also aux bus will be identified \
                     as zero-injection bus
 

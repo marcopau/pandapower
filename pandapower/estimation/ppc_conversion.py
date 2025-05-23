@@ -507,11 +507,15 @@ def _add_zero_injection(net, ppci, bus_append, zero_injection):
     :param ppci: generated ppci
     :param bus_append: added columns to the ppci bus with zero injection label
     :param zero_injection: parameter to control which bus to be identified as zero injection
+        - None: no zero injection buses added
+        - "aux_bus": only auxiliary buses created in ppc 
+        - "no_inj_bus": aux buses + buses without load, gen, sgen, etc.
+        - "zero_pwr_bus": aux buses + all buses with a zero power (also if there is load, sgen, etc.)
     :return bus_append: added columns
     """
     bus_append[:, ZERO_INJ_FLAG] = False
     if zero_injection is not None:
-        # identify aux bus to zero injection
+        # identify aux bus as zero injection
         if net._pd2ppc_lookups['aux']:
             aux_bus_lookup = np.concatenate([v for k, v in net._pd2ppc_lookups['aux'].items() if k != 'xward'])
             aux_bus = net._pd2ppc_lookups['bus'][aux_bus_lookup]
@@ -519,11 +523,25 @@ def _add_zero_injection(net, ppci, bus_append, zero_injection):
             bus_append[aux_bus, ZERO_INJ_FLAG] = True
 
         if isinstance(zero_injection, str):
-            if zero_injection == 'auto':
-                # identify bus without elements and pq measurements as zero injection
+            if zero_injection in ['zero_pwr_bus', 'no_inj_bus']:
+                # identify all buses with zero power and no pq measurements as zero injection
                 zero_inj_bus_mask = (ppci["bus"][:, 1] == 1) & (ppci["bus"][:, 2:4] == 0).all(axis=1) & \
                                     np.isnan(bus_append[:, P:(Q_STD + 1)]).all(axis=1)
                 bus_append[zero_inj_bus_mask, ZERO_INJ_FLAG] = True
+                if zero_injection == 'no_inj_bus':
+                    b = np.array([], dtype=np.int64)
+                    pq_elements = ["load", "motor", "sgen", "storage", "ward", "xward", 
+                                   "asymmetric_load", "asymmetric_sgen"]
+                    bus_lookup = net["_pd2ppc_lookups"]["bus"]
+                    for element in pq_elements:
+                        tab = net[element]
+                        if len(tab) == 0:
+                            continue
+                        in_service = tab["in_service"]
+                        b = np.hstack([b, tab["bus"][in_service]])
+                    active_buses = np.unique(b)
+                    active_buses = bus_lookup[active_buses]
+                    bus_append[active_buses, ZERO_INJ_FLAG] = False
             elif zero_injection != "aux_bus":
                 raise UserWarning("zero injection parameter is not correctly initialized")
         elif hasattr(zero_injection, '__iter__'):
@@ -533,8 +551,10 @@ def _add_zero_injection(net, ppci, bus_append, zero_injection):
         zero_inj_bus = np.argwhere(bus_append[:, ZERO_INJ_FLAG]).ravel()
         bus_append[zero_inj_bus, P] = 0
         bus_append[zero_inj_bus, P_STD] = ZERO_INJECTION_STD_DEV
+        bus_append[zero_inj_bus, P_IDX] = -1
         bus_append[zero_inj_bus, Q] = 0
         bus_append[zero_inj_bus, Q_STD] = ZERO_INJECTION_STD_DEV
+        bus_append[zero_inj_bus, Q_IDX] = -1
     return bus_append
 
 
