@@ -581,10 +581,10 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
 
     # piece together our measurement vector z
     z = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P],
-                        ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM],
-                        ppci["branch"][p_line_t_not_nan, branch_cols + P_TO],
                         ppci["bus"][q_bus_not_nan, bus_cols + Q],
+                        ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM],
                         ppci["branch"][q_line_f_not_nan, branch_cols + Q_FROM],
+                        ppci["branch"][p_line_t_not_nan, branch_cols + P_TO],
                         ppci["branch"][q_line_t_not_nan, branch_cols + Q_TO],
                         ppci["bus"][v_bus_not_nan, bus_cols + VM],
                         ppci["bus"][v_degree_bus_not_nan, bus_cols + VA],
@@ -592,10 +592,10 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                         ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO]
                         )).real.astype(np.float64)
     imag_meas = np.concatenate((np.zeros(sum(p_bus_not_nan)),
-                                np.zeros(sum(p_line_f_not_nan)),
-                                np.zeros(sum(p_line_t_not_nan)),
                                 np.zeros(sum(q_bus_not_nan)),
+                                np.zeros(sum(p_line_f_not_nan)),
                                 np.zeros(sum(q_line_f_not_nan)),
+                                np.zeros(sum(p_line_t_not_nan)),
                                 np.zeros(sum(q_line_t_not_nan)),
                                 np.zeros(sum(v_bus_not_nan)),
                                 np.zeros(sum(v_degree_bus_not_nan)),
@@ -615,10 +615,10 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
     if not update_meas_only:
         # conserve the pandapower indices of measurements in the ppci order
         pp_meas_indices = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_IDX],
-                                          ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_IDX],
-                                          ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_IDX],
                                           ppci["bus"][q_bus_not_nan, bus_cols + Q_IDX],
+                                          ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_IDX],
                                           ppci["branch"][q_line_f_not_nan, branch_cols + Q_FROM_IDX],
+                                          ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_IDX],
                                           ppci["branch"][q_line_t_not_nan, branch_cols + Q_TO_IDX],
                                           ppci["bus"][v_bus_not_nan, bus_cols + VM_IDX],
                                           ppci["bus"][v_degree_bus_not_nan, bus_cols + VA_IDX],
@@ -627,10 +627,10 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                           )).real.astype(np.int64)
         # Covariance matrix R
         r_cov = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_STD],
-                                ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_STD],
-                                ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_STD],
                                 ppci["bus"][q_bus_not_nan, bus_cols + Q_STD],
+                                ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_STD],
                                 ppci["branch"][q_line_f_not_nan, branch_cols + Q_FROM_STD],
+                                ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_STD],
                                 ppci["branch"][q_line_t_not_nan, branch_cols + Q_TO_STD],
                                 ppci["bus"][v_bus_not_nan, bus_cols + VM_STD],
                                 ppci["bus"][v_degree_bus_not_nan, bus_cols + VA_STD],
@@ -638,20 +638,20 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                 ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO_STD],
                                 )).real.astype(np.float64)
         meas_mask_all = np.concatenate([p_bus_not_nan,
-                                    p_line_f_not_nan,
-                                    p_line_t_not_nan,
                                     q_bus_not_nan,
+                                    p_line_f_not_nan,
                                     q_line_f_not_nan,
+                                    p_line_t_not_nan,
                                     q_line_t_not_nan,
                                     v_bus_not_nan,
                                     v_degree_bus_not_nan,
                                     i_line_f_not_nan,
                                     i_line_t_not_nan])
         meas_mask = {"pbus" : np.flatnonzero(p_bus_not_nan),
-                     "pfrom" : np.flatnonzero(p_line_f_not_nan),
-                     "pto" : np.flatnonzero(p_line_t_not_nan),
                      "qbus" : np.flatnonzero(q_bus_not_nan),
+                     "pfrom" : np.flatnonzero(p_line_f_not_nan),
                      "qfrom" : np.flatnonzero(q_line_f_not_nan),
+                     "pto" : np.flatnonzero(p_line_t_not_nan),
                      "qto" : np.flatnonzero(q_line_t_not_nan),
                      "vm" : np.flatnonzero(v_bus_not_nan),
                      "va" : np.flatnonzero(v_degree_bus_not_nan),
@@ -671,10 +671,6 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
             meas_mask["pbalance"] = np.flatnonzero(ppci.non_slack_bus_mask)
             meas_mask["qbalance"] = np.flatnonzero(ppci.non_slack_bus_mask)
             meas_mask["afactor"] = np.arange(num_clusters)
-            meas_mask_all = np.concatenate(
-                (meas_mask, ppci.non_slack_bus_mask, ppci.non_slack_bus_mask, np.ones(num_clusters)))
-        
-        meas_mask["all"] = np.flatnonzero(meas_mask_all)
 
         return z, pp_meas_indices, r_cov, meas_mask, idx_non_imeas
     else:
