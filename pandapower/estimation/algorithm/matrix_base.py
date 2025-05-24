@@ -100,14 +100,42 @@ class BaseAlgebra:
 
         meas_mask = self.eppci.non_nan_meas_mask
         V = self.eppci.E2V(E1)
+        nvar = 2*len(V)
 
-        dPbus, dQbus = self._dSbus_dv(V, meas_mask["pbus"], meas_mask["qbus"])
-        dPf, dQf = self._dSbr_dv(V, "from", meas_mask["pfrom"], meas_mask["qfrom"])
-        dPt, dQt = self._dSbr_dv(V, "to", meas_mask["pto"], meas_mask["qto"])
+        if len(meas_mask["pbus"])+len(meas_mask["qbus"])>0:
+            dPbus, dQbus = self._dSbus_dv(V, meas_mask["pbus"], meas_mask["qbus"])
+        else:
+            dPbus = sparse((0, nvar))
+            dQbus = sparse((0, nvar))
+
+        if len(meas_mask["pfrom"])+len(meas_mask["qfrom"])>0:
+            dPf, dQf = self._dSbr_dv(V, "from", meas_mask["pfrom"], meas_mask["qfrom"])
+        else:
+            dPf = sparse((0, nvar))
+            dQf = sparse((0, nvar))
+
+        if len(meas_mask["pto"])+len(meas_mask["qto"])>0:
+            dPt, dQt = self._dSbr_dv(V, "to", meas_mask["pto"], meas_mask["qto"])
+        else:
+            dPt = sparse((0, nvar))
+            dQt = sparse((0, nvar))
+
         dVm = self._dVmbus_dV(V, meas_mask["vm"])
-        dVa = self._dVabus_dV(V, meas_mask["va"])
-        dIfm = self._dImbr_dV(V, "from", meas_mask["ifrom"])
-        dItm = self._dImbr_dV(V, "to", meas_mask["ito"])
+
+        if len(meas_mask["va"])>0:
+            dVa = self._dVabus_dV(V, meas_mask["va"])
+        else:
+            dVa = sparse((0, nvar))
+
+        if len(meas_mask["ifrom"])>0:
+            dIfm = self._dImbr_dV(V, "from", meas_mask["ifrom"])
+        else:
+            dIfm = sparse((0, nvar))
+
+        if len(meas_mask["ito"])>0:
+            dItm = self._dImbr_dV(V, "to", meas_mask["ito"])
+        else:
+            dItm = sparse((0, nvar))
         # dIfa = self._dIabr_dV(V, "from")
         # dIta = self._dIabr_dV(V, "to")
 
