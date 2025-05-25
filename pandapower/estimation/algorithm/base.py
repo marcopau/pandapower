@@ -299,7 +299,9 @@ class AFWLSAlgorithm(BaseAlgorithm):
         current_error, cur_it = 100., 0
         # invert covariance matrix
         eppci.r_cov[eppci.r_cov<(10**(-5))] = 10**(-5)
-        r_inv = csr_matrix(np.diagflat(1 / eppci.r_cov ** 2))
+        r_weight = 1 / eppci.r_cov ** 2
+        len_r = np.arange(len(r_weight))
+        r_inv = csr_matrix((r_weight, (len_r, len_r)))
         E = eppci.E
         num_clusters = len(self.eppci["clusters"])
         while current_error > self.tolerance and cur_it < self.max_iterations:

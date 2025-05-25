@@ -82,7 +82,7 @@ class BaseAlgebra:
 
         if self.eppci.algorithm == "af-wls":
             Pb2 = np.real(Sbuse) - np.sum(np.multiply(E2,self.eppci["rated_power_clusters"][:,:num_clusters]),axis=1)
-            Qb2 = np.real(Sbuse) - np.sum(np.multiply(E2,self.eppci["rated_power_clusters"][:,num_clusters:2*num_clusters]),axis=1)
+            Qb2 = np.imag(Sbuse) - np.sum(np.multiply(E2,self.eppci["rated_power_clusters"][:,num_clusters:2*num_clusters]),axis=1)
             Pbuse2 = Pb2[meas_mask["pbalance"]]
             Qbuse2 = Qb2[meas_mask["qbalance"]]
             E2e = E2[meas_mask["afactor"]]

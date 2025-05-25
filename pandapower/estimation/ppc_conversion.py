@@ -637,16 +637,6 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
                                 ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM_STD],
                                 ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO_STD],
                                 )).real.astype(np.float64)
-        meas_mask_all = np.concatenate([p_bus_not_nan,
-                                    q_bus_not_nan,
-                                    p_line_f_not_nan,
-                                    q_line_f_not_nan,
-                                    p_line_t_not_nan,
-                                    q_line_t_not_nan,
-                                    v_bus_not_nan,
-                                    v_degree_bus_not_nan,
-                                    i_line_f_not_nan,
-                                    i_line_t_not_nan])
         meas_mask = {"pbus" : np.flatnonzero(p_bus_not_nan),
                      "qbus" : np.flatnonzero(q_bus_not_nan),
                      "pfrom" : np.flatnonzero(p_line_f_not_nan),
