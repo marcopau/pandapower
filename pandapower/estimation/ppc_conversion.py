@@ -123,7 +123,7 @@ def _add_measurements_to_branch(
         - map_branch: pd.Series mapping element indices to PPCI branch indices.
     """
 
-    for meas_type in ('p', 'q', 'i', 'ia'):
+    for meas_type in ('p', 'q', 'i'):
         filtered = meas[
             (meas.measurement_type == meas_type)
             & (meas.element_type == element_name)
@@ -441,8 +441,8 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
         meas.loc[i_meas.index, "value"] /= base_i_ka / np.sqrt(3)
         meas.loc[i_meas.index, "std_dev"] /= base_i_ka / np.sqrt(3)
 
-    # Convert angle measurements (ia, va) from degrees to radians
-    meas_dg_mask = (meas.measurement_type == 'ia') | (meas.measurement_type == 'va')
+    # Convert angle measurements (va) from degrees to radians
+    meas_dg_mask = (meas.measurement_type == 'va')
     if not meas[meas_dg_mask].empty:
         meas.loc[meas_dg_mask, "value"] = np.deg2rad(meas.loc[meas_dg_mask, "value"])
         meas.loc[meas_dg_mask, "std_dev"] = np.deg2rad(meas.loc[meas_dg_mask, "std_dev"])
@@ -493,7 +493,7 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     else:
         ppci["branch"][:, branch_cols: branch_cols + branch_cols_se] = branch_append
 
-    # Add rated power information needed for AF-WLS estimator (if applicable)
+    # Add rated power information needed for AF-WLS estimator
     if algorithm == 'af-wls':
         _add_rated_power_information_af_wls(net, ppci)
 
@@ -576,34 +576,31 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
     v_degree_bus_not_nan = ~np.isnan(ppci["bus"][:, bus_cols + VA])
     i_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IM_FROM])
     i_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IM_TO])
-    i_degree_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IA_FROM])
-    i_degree_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IA_TO])
+    # i_degree_line_f_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IA_FROM])
+    # i_degree_line_t_not_nan = ~np.isnan(ppci["branch"][:, branch_cols + IA_TO])
+
     # piece together our measurement vector z
     z = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P],
-                        ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM],
-                        ppci["branch"][p_line_t_not_nan, branch_cols + P_TO],
                         ppci["bus"][q_bus_not_nan, bus_cols + Q],
+                        ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM],
                         ppci["branch"][q_line_f_not_nan, branch_cols + Q_FROM],
+                        ppci["branch"][p_line_t_not_nan, branch_cols + P_TO],
                         ppci["branch"][q_line_t_not_nan, branch_cols + Q_TO],
                         ppci["bus"][v_bus_not_nan, bus_cols + VM],
                         ppci["bus"][v_degree_bus_not_nan, bus_cols + VA],
                         ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM],
-                        ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO],
-                        ppci["branch"][i_degree_line_f_not_nan, branch_cols + IA_FROM],
-                        ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO]
+                        ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO]
                         )).real.astype(np.float64)
     imag_meas = np.concatenate((np.zeros(sum(p_bus_not_nan)),
-                                np.zeros(sum(p_line_f_not_nan)),
-                                np.zeros(sum(p_line_t_not_nan)),
                                 np.zeros(sum(q_bus_not_nan)),
+                                np.zeros(sum(p_line_f_not_nan)),
                                 np.zeros(sum(q_line_f_not_nan)),
+                                np.zeros(sum(p_line_t_not_nan)),
                                 np.zeros(sum(q_line_t_not_nan)),
                                 np.zeros(sum(v_bus_not_nan)),
                                 np.zeros(sum(v_degree_bus_not_nan)),
                                 np.ones(sum(i_line_f_not_nan)),
-                                np.ones(sum(i_line_t_not_nan)),
-                                np.zeros(sum(i_degree_line_f_not_nan)),
-                                np.zeros(sum(i_degree_line_t_not_nan))
+                                np.ones(sum(i_line_t_not_nan))
                                 )).astype(bool)
     if ppci.algorithm == "af-wls":
         balance_eq_meas = np.zeros(ppci["rated_power_clusters"].shape[0]).astype(np.float64)
@@ -618,48 +615,39 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
     if not update_meas_only:
         # conserve the pandapower indices of measurements in the ppci order
         pp_meas_indices = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_IDX],
-                                          ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_IDX],
-                                          ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_IDX],
                                           ppci["bus"][q_bus_not_nan, bus_cols + Q_IDX],
+                                          ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_IDX],
                                           ppci["branch"][q_line_f_not_nan, branch_cols + Q_FROM_IDX],
+                                          ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_IDX],
                                           ppci["branch"][q_line_t_not_nan, branch_cols + Q_TO_IDX],
                                           ppci["bus"][v_bus_not_nan, bus_cols + VM_IDX],
                                           ppci["bus"][v_degree_bus_not_nan, bus_cols + VA_IDX],
                                           ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM_IDX],
                                           ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO_IDX],
-                                          ppci["branch"][i_degree_line_f_not_nan, branch_cols + IA_FROM_IDX],
-                                          ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO_IDX]
                                           )).real.astype(np.int64)
         # Covariance matrix R
         r_cov = np.concatenate((ppci["bus"][p_bus_not_nan, bus_cols + P_STD],
-                                ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_STD],
-                                ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_STD],
                                 ppci["bus"][q_bus_not_nan, bus_cols + Q_STD],
+                                ppci["branch"][p_line_f_not_nan, branch_cols + P_FROM_STD],
                                 ppci["branch"][q_line_f_not_nan, branch_cols + Q_FROM_STD],
+                                ppci["branch"][p_line_t_not_nan, branch_cols + P_TO_STD],
                                 ppci["branch"][q_line_t_not_nan, branch_cols + Q_TO_STD],
                                 ppci["bus"][v_bus_not_nan, bus_cols + VM_STD],
                                 ppci["bus"][v_degree_bus_not_nan, bus_cols + VA_STD],
                                 ppci["branch"][i_line_f_not_nan, branch_cols + IM_FROM_STD],
                                 ppci["branch"][i_line_t_not_nan, branch_cols + IM_TO_STD],
-                                ppci["branch"][i_degree_line_f_not_nan, branch_cols + IA_FROM_STD],
-                                ppci["branch"][i_degree_line_t_not_nan, branch_cols + IA_TO_STD]
                                 )).real.astype(np.float64)
-        meas_mask = np.concatenate([p_bus_not_nan,
-                                    p_line_f_not_nan,
-                                    p_line_t_not_nan,
-                                    q_bus_not_nan,
-                                    q_line_f_not_nan,
-                                    q_line_t_not_nan,
-                                    v_bus_not_nan,
-                                    v_degree_bus_not_nan,
-                                    i_line_f_not_nan,
-                                    i_line_t_not_nan,
-                                    i_degree_line_f_not_nan,
-                                    i_degree_line_t_not_nan])
-        any_i_meas = np.any(np.r_[i_line_f_not_nan, i_line_t_not_nan])
-        any_degree_meas = np.any(np.r_[v_degree_bus_not_nan,
-                                       i_degree_line_f_not_nan,
-                                       i_degree_line_t_not_nan])
+        meas_mask = {"pbus" : np.flatnonzero(p_bus_not_nan),
+                     "qbus" : np.flatnonzero(q_bus_not_nan),
+                     "pfrom" : np.flatnonzero(p_line_f_not_nan),
+                     "qfrom" : np.flatnonzero(q_line_f_not_nan),
+                     "pto" : np.flatnonzero(p_line_t_not_nan),
+                     "qto" : np.flatnonzero(q_line_t_not_nan),
+                     "vm" : np.flatnonzero(v_bus_not_nan),
+                     "va" : np.flatnonzero(v_degree_bus_not_nan),
+                     "ifrom" : np.flatnonzero(i_line_f_not_nan),
+                     "ito" : np.flatnonzero(i_line_t_not_nan)}
+        
         if ppci.algorithm == "af-wls":
             num_clusters = len(ppci["clusters"])
             P_balance_dev_std = np.sqrt(
@@ -670,10 +658,11 @@ def _build_measurement_vectors(ppci, update_meas_only=False):
             r_cov = np.concatenate(
                 (r_cov, P_balance_dev_std[ppci.non_slack_bus_mask], Q_balance_dev_std[ppci.non_slack_bus_mask],
                  af_vmeas_dev_std))
-            meas_mask = np.concatenate(
-                (meas_mask, ppci.non_slack_bus_mask, ppci.non_slack_bus_mask, np.ones(len(ppci["clusters"]))))
+            meas_mask["pbalance"] = np.flatnonzero(ppci.non_slack_bus_mask)
+            meas_mask["qbalance"] = np.flatnonzero(ppci.non_slack_bus_mask)
+            meas_mask["afactor"] = np.arange(num_clusters)
 
-        return z, pp_meas_indices, r_cov, meas_mask, any_i_meas, any_degree_meas, idx_non_imeas
+        return z, pp_meas_indices, r_cov, meas_mask, idx_non_imeas
     else:
         return z
 
@@ -735,9 +724,9 @@ class ExtendedPPCI(UserDict):
     def _initialize_meas(self):
         # calculate relevant vectors from ppci measurements
         self.z, self.pp_meas_indices, self.r_cov, self.non_nan_meas_mask, \
-            self.any_i_meas, self.any_degree_meas, self.idx_non_imeas = \
+            self.idx_non_imeas = \
             _build_measurement_vectors(self, update_meas_only=False)
-        self.non_nan_meas_selector = np.flatnonzero(self.non_nan_meas_mask)
+        # self.non_nan_meas_selector = np.flatnonzero(self.non_nan_meas_mask)
 
     def update_meas(self):
         self.z = _build_measurement_vectors(self, update_meas_only=True)
