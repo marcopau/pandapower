@@ -155,7 +155,7 @@ class ObservabilityAnalyzer(NetworkAnalysisCore):
         self.eppci.data['branch'] = np.hstack((self.eppci.data['branch'], all_branches_idx.reshape(-1, 1)))
 
         sem = BaseAlgebra(self.eppci)
-        original_jacobian = csr_matrix(self._create_jacobian(sem))
+        # jacobian = csr_matrix(self._create_jacobian(sem))
 
         current_iteration = 1
         while current_iteration <= max_iter:
@@ -167,7 +167,7 @@ class ObservabilityAnalyzer(NetworkAnalysisCore):
             self._delete_branch(elements_to_drop)
 
             # Step 3: Construct Jacobian matrix and gain matrix
-            jacobian = original_jacobian[self.eppci.non_nan_meas_selector, :]
+            jacobian = csr_matrix(self._create_jacobian(sem))
             gain_matrix = jacobian.T @ jacobian
 
             # Step 4: LU decomposition and zero pivot validation
