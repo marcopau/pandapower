@@ -7,12 +7,14 @@ import numpy as np
 from scipy.sparse import csr_matrix, vstack, hstack
 from scipy.sparse.linalg import spsolve, norm, inv
 
+from pandapower.estimation.algorithm.chi2_analysis import perform_chi2_test
 from pandapower.estimation.algorithm.estimator import BaseEstimatorIRWLS, get_estimator
 from pandapower.estimation.algorithm.matrix_base import BaseAlgebra, \
     BaseAlgebraZeroInjConstraints
 from pandapower.estimation.idx_bus import ZERO_INJ_FLAG, P, P_STD, Q, Q_STD
 from pandapower.estimation.ppc_conversion import ExtendedPPCI
 from pandapower.pypower.idx_bus import bus_cols
+import pandapower as pp
 
 try:
     import pandaplan.core.pplog as logging
@@ -24,10 +26,20 @@ __all__ = ["WLSAlgorithm", "WLSZeroInjectionConstraintsAlgorithm", "IRWLSAlgorit
 
 
 class BaseAlgorithm:
-    def __init__(self, tolerance, maximum_iterations, logger=std_logger):
+    def __init__(
+            self,
+            tolerance,
+            maximum_iterations,
+            net: pp.pandapowerNet,
+            confidence_level=None,
+            logger=std_logger,
+
+    ):
         self.tolerance = tolerance
         self.max_iterations = maximum_iterations
         self.logger = logger
+        self.net = net
+        self.confidence_level = confidence_level
         self.successful = False
         self.iterations = None
 
@@ -67,17 +79,30 @@ class BaseAlgorithm:
 
 
 class WLSAlgorithm(BaseAlgorithm):
-    def __init__(self, tolerance, maximum_iterations, logger=std_logger):
-        super(WLSAlgorithm, self).__init__(tolerance, maximum_iterations, logger)
+    def __init__(
+            self,
+            tolerance,
+            maximum_iterations,
+            net: pp.pandapowerNet,
+            confidence_level=None,
+            logger=std_logger,
+
+    ):
+        super(WLSAlgorithm, self).__init__(
+            tolerance,
+            maximum_iterations,
+            net,
+            confidence_level,
+            logger,
+        )
 
         # Parameters for Bad data detection
-        self.R_inv = None
-        self.Gm = None
-        self.r = None
-        self.H = None
-        self.hx = None
+
         self.iterations = None
         self.obj_func = None
+        self.j_max = None
+        self.j_min = None
+        self.bad_data_exists = None
         logging.basicConfig(level=logging.DEBUG)
 
     def estimate(self, eppci: ExtendedPPCI, debug_mode=False, **kwargs):
@@ -87,7 +112,7 @@ class WLSAlgorithm(BaseAlgorithm):
 
         current_error, cur_it = 100., 0
         # invert covariance matrix
-        eppci.r_cov[eppci.r_cov<(10**(-5))] = 10**(-5)
+        eppci.r_cov[eppci.r_cov < (10 ** (-5))] = 10 ** (-5)
         r_weight = 1 / eppci.r_cov ** 2
         len_r = np.arange(len(r_weight))
         r_inv = csr_matrix((r_weight, (len_r, len_r)))
@@ -105,9 +130,9 @@ class WLSAlgorithm(BaseAlgorithm):
                 # because with flat start they have null derivative
                 if cur_it == 0 and eppci.any_i_meas:
                     idx = eppci.idx_non_imeas
-                    r_inv = r_inv[idx,:][:,idx]
-                    r = r[idx,:]
-                    H = H[idx,:]
+                    r_inv = r_inv[idx, :][:, idx]
+                    r = r[idx, :]
+                    H = H[idx, :]
 
                 # gain matrix G_m
                 # G_m = H^t * R^-1 * H
@@ -116,8 +141,8 @@ class WLSAlgorithm(BaseAlgorithm):
                 if debug_mode:
                     norm_G = norm(G_m, np.inf)
                     norm_invG = norm(inv(G_m), np.inf)
-                    cond = norm_G*norm_invG
-                    if cond > 10**18:
+                    cond = norm_G * norm_invG
+                    if cond > 10 ** 18:
                         self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
@@ -128,14 +153,14 @@ class WLSAlgorithm(BaseAlgorithm):
                 # operating conditions far from starting state variables
                 current_error = np.max(np.abs(d_E))
                 if current_error > 0.35:
-                    d_E = d_E*0.35/current_error
+                    d_E = d_E * 0.35 / current_error
 
                 # Update E with d_E
                 E += d_E.ravel()
                 eppci.update_E(E)
+                obj_func = (r.T * r_inv * r)[0, 0]
 
                 if debug_mode:
-                    obj_func = (r.T*r_inv*r)[0,0]
                     self.logger.debug("Current delta_x: {:.7f}".format(current_error))
                     self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
 
@@ -154,14 +179,18 @@ class WLSAlgorithm(BaseAlgorithm):
         # check if the estimation is successfull
         self.check_result(current_error, cur_it)
         self.iterations = cur_it
-        if debug_mode: 
-            self.obj_func = obj_func
+
         if self.successful:
-            # store variables required for chi^2 and r_N_max test:
-            self.R_inv = r_inv.toarray()
-            self.Gm = G_m.toarray()
-            self.r = r.toarray()
-            self.H = H.toarray()
+            if self.confidence_level:
+                # store variables required for chi^2 and r_N_max test:
+                j_max, j_min = perform_chi2_test(
+                    net=self.net,
+                    eppci=eppci,
+                    confidence_level=self.confidence_level,
+                )
+                self.j_max, self.j_min = j_max, j_min
+                self.bad_data_exists = j_max >= obj_func >= j_min
+            self.obj_func = obj_func
             # create h(x) for the current iteration
             self.hx = sem.create_hx(eppci.E)
         return eppci
@@ -174,7 +203,8 @@ class WLSZeroInjectionConstraintsAlgorithm(BaseAlgorithm):
         if not np.any(eppci["bus"][:, bus_cols + ZERO_INJ_FLAG]):
             raise UserWarning("Network has no bus with zero injections! Please use WLS instead!")
         zero_injection_bus = np.argwhere(eppci["bus"][:, bus_cols + ZERO_INJ_FLAG]).ravel()
-        eppci["bus"][np.ix_(zero_injection_bus, [bus_cols + P, bus_cols + P_STD, bus_cols + Q, bus_cols + Q_STD])] = np.nan
+        eppci["bus"][
+            np.ix_(zero_injection_bus, [bus_cols + P, bus_cols + P_STD, bus_cols + Q, bus_cols + Q_STD])] = np.nan
         # Withn pq buses with zero injection identify those who have also no p or q measurement
         p_zero_injections = zero_injection_bus
         q_zero_injections = zero_injection_bus
@@ -283,8 +313,20 @@ class IRWLSAlgorithm(BaseAlgorithm):
 
 
 class AFWLSAlgorithm(BaseAlgorithm):
-    def __init__(self, tolerance, maximum_iterations, logger=std_logger):
-        super(AFWLSAlgorithm, self).__init__(tolerance, maximum_iterations, logger)
+    def __init__(
+            self,
+            tolerance,
+            maximum_iterations,
+            net: pp.pandapowerNet,
+            logger=std_logger,
+
+    ):
+        super(AFWLSAlgorithm, self).__init__(
+            tolerance=tolerance,
+            maximum_iterations=maximum_iterations,
+            net=net,
+            logger=logger,
+        )
 
         # Parameters for Bad data detection
         self.R_inv = None
@@ -302,7 +344,7 @@ class AFWLSAlgorithm(BaseAlgorithm):
 
         current_error, cur_it = 100., 0
         # invert covariance matrix
-        eppci.r_cov[eppci.r_cov<(10**(-5))] = 10**(-5)
+        eppci.r_cov[eppci.r_cov < (10 ** (-5))] = 10 ** (-5)
         r_weight = 1 / eppci.r_cov ** 2
         len_r = np.arange(len(r_weight))
         r_inv = csr_matrix((r_weight, (len_r, len_r)))
@@ -319,17 +361,17 @@ class AFWLSAlgorithm(BaseAlgorithm):
 
                 if cur_it == 0 and eppci.any_i_meas:
                     idx = eppci.idx_non_imeas
-                    r_inv = r_inv[idx,:][:,idx]
-                    r = r[idx,:]
-                    H = H[idx,:]
+                    r_inv = r_inv[idx, :][:, idx]
+                    r = r[idx, :]
+                    H = H[idx, :]
 
                 # gain matrix G_m
                 G_m = H.T * (r_inv * H)
-                if debug_mode: 
+                if debug_mode:
                     norm_G = norm(G_m, np.inf)
                     norm_invG = norm(inv(G_m), np.inf)
-                    cond = norm_G*norm_invG
-                    if cond > 10**18:
+                    cond = norm_G * norm_invG
+                    if cond > 10 ** 18:
                         self.logger.warning("WARNING: Gain matrix is ill-conditioned: {:.2E}".format(cond))
 
                 # state vector difference d_E
@@ -341,7 +383,7 @@ class AFWLSAlgorithm(BaseAlgorithm):
                 # log data 
                 current_error = np.max(np.abs(d_E))
                 if debug_mode:
-                    obj_func = (r.T*r_inv*r)[0,0]
+                    obj_func = (r.T * r_inv * r)[0, 0]
                     self.logger.debug("Current delta_x: {:.7f}".format(current_error))
                     self.logger.debug("Current objective function value: {:.1f}".format(obj_func))
 

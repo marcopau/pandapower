@@ -35,7 +35,7 @@ ALLOWED_OPT_VAR = {"a", "opt_method", "estimator"}
 def estimate(net, algorithm='wls',
              init='flat', tolerance=1e-6, maximum_iterations=50,
              zero_injection='aux_bus', fuse_buses_with_bb_switch='all',
-             debug_mode=False, **opt_vars):
+             debug_mode=False, confidence_level=None, **opt_vars):
     """
     Wrapper function for WLS state estimation.
 
@@ -84,12 +84,19 @@ def estimate(net, algorithm='wls',
     if algorithm not in ALGORITHM_MAPPING:
         raise UserWarning("Algorithm {} is not a valid estimator".format(algorithm))
 
-    se = StateEstimation(net, tolerance, maximum_iterations, algorithm=algorithm)
+    se = StateEstimation(
+        net,
+        tolerance,
+        maximum_iterations,
+        confidence_level=confidence_level,
+        algorithm=algorithm,
+    )
     v_start, delta_start = _initialize_voltage(net, init)
     return se.estimate(v_start=v_start, delta_start=delta_start,
                        zero_injection=zero_injection,
-                       fuse_buses_with_bb_switch=fuse_buses_with_bb_switch, 
-                       algorithm=algorithm, debug_mode=debug_mode, **opt_vars)
+                       fuse_buses_with_bb_switch=fuse_buses_with_bb_switch,
+                       algorithm=algorithm, debug_mode=debug_mode,
+                       **opt_vars)
 
 
 def remove_bad_data(net, init='flat', tolerance=1e-6, maximum_iterations=10,
@@ -167,14 +174,28 @@ class StateEstimation:
     process.
     """
 
-    def __init__(self, net, tolerance=1e-6, maximum_iterations=50, algorithm='wls', logger=None, recycle=False):
+    def __init__(
+            self,
+            net,
+            tolerance=1e-6,
+            maximum_iterations=50,
+            algorithm='wls',
+            confidence_level=None,
+            logger=None,
+            recycle=False
+    ):
         self.logger = logger
         if self.logger is None:
             self.logger = std_logger
             # self.logger.setLevel(logging.DEBUG)
         self.net = net
-        self.solver = ALGORITHM_MAPPING[algorithm](tolerance,
-                                                   maximum_iterations, self.logger)
+        self.solver = ALGORITHM_MAPPING[algorithm](
+            tolerance,
+            maximum_iterations,
+            net,
+            confidence_level,
+            self.logger,
+        )
         self.ppc = None
         self.eppci = None
         self.recycle = recycle
@@ -184,7 +205,7 @@ class StateEstimation:
         self.delta = None
         self.bad_data_present = None
 
-    def estimate(self, v_start='flat', delta_start='flat', zero_injection=None, 
+    def estimate(self, v_start='flat', delta_start='flat', zero_injection=None,
                  fuse_buses_with_bb_switch='all', algorithm='wls', debug_mode=False, **opt_vars):
         """
         The function estimate is the main function of the module. It takes the inputs
@@ -260,7 +281,7 @@ class StateEstimation:
 
         self.net, self.ppc, self.eppci = pp2eppci(self.net, v_start=v_start, delta_start=delta_start,
                                                   calculate_voltage_angles=True,
-                                                  zero_injection=zero_injection, algorithm=algorithm, 
+                                                  zero_injection=zero_injection, algorithm=algorithm,
                                                   ppc=self.ppc, eppci=self.eppci)
 
         # Estimate voltage magnitude and angle with the given estimator
@@ -280,11 +301,14 @@ class StateEstimation:
         # if recycle is not wished, reset ppc, ppci
         if not self.recycle:
             self.ppc, self.eppci = None, None
-        
+
         if algorithm == "wls" or algorithm == "af-wls":
             now = datetime.now()
             se_results = {
                 "success": self.solver.successful,
+                "j_max": self.solver.j_max,
+                "j_min": self.solver.j_min,
+                "bad_data_exists": self.solver.bad_data_exists,
                 "num_iterations": self.solver.iterations,
                 "objective_function_value": self.solver.obj_func,
                 "time": now.strftime("%Y-%m-%d %H:%M:%S")}
