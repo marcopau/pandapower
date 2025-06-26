@@ -7,7 +7,7 @@ import numpy as np
 from scipy.sparse import csr_matrix, vstack, hstack
 from scipy.sparse.linalg import spsolve, norm, inv
 
-from pandapower.estimation.algorithm.chi2_analysis import perform_chi2_test
+from pandapower.estimation.algorithm.bad_data import perform_chi2_test, perform_rn_max_test
 from pandapower.estimation.algorithm.estimator import BaseEstimatorIRWLS, get_estimator
 from pandapower.estimation.algorithm.matrix_base import BaseAlgebra, \
     BaseAlgebraZeroInjConstraints
@@ -32,6 +32,7 @@ class BaseAlgorithm:
             maximum_iterations,
             net: pp.pandapowerNet,
             confidence_level=None,
+            rN_test = None,
             logger=std_logger,
 
     ):
@@ -40,6 +41,7 @@ class BaseAlgorithm:
         self.logger = logger
         self.net = net
         self.confidence_level = confidence_level
+        self.rN_test = rN_test
         self.successful = False
         self.iterations = None
 
@@ -85,6 +87,7 @@ class WLSAlgorithm(BaseAlgorithm):
             maximum_iterations,
             net: pp.pandapowerNet,
             confidence_level=None,
+            rN_test=None,
             logger=std_logger,
 
     ):
@@ -93,6 +96,7 @@ class WLSAlgorithm(BaseAlgorithm):
             maximum_iterations,
             net,
             confidence_level,
+            rN_test,
             logger,
         )
 
@@ -103,6 +107,7 @@ class WLSAlgorithm(BaseAlgorithm):
         self.j_max = None
         self.j_min = None
         self.bad_data_exists = None
+
         logging.basicConfig(level=logging.DEBUG)
 
     def estimate(self, eppci: ExtendedPPCI, debug_mode=False, **kwargs):
@@ -189,7 +194,15 @@ class WLSAlgorithm(BaseAlgorithm):
                     confidence_level=self.confidence_level,
                 )
                 self.j_max, self.j_min = j_max, j_min
-                self.bad_data_exists = j_max >= obj_func >= j_min
+                self.bad_data_exists = j_max <= obj_func
+            if self.rN_test:
+                rN = perform_rn_max_test(
+                    eppci=eppci,
+                    H=H,
+                    Gm=G_m,
+                    r=r
+                )
+                self.rN = rN
             self.obj_func = obj_func
             # create h(x) for the current iteration
             self.hx = sem.create_hx(eppci.E)

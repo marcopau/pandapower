@@ -35,7 +35,7 @@ ALLOWED_OPT_VAR = {"a", "opt_method", "estimator"}
 def estimate(net, algorithm='wls',
              init='flat', tolerance=1e-6, maximum_iterations=50,
              zero_injection='aux_bus', fuse_buses_with_bb_switch='all',
-             debug_mode=False, confidence_level=None, **opt_vars):
+             debug_mode=False, confidence_level=None, rN_test=None,  **opt_vars):
     """
     Wrapper function for WLS state estimation.
 
@@ -89,6 +89,7 @@ def estimate(net, algorithm='wls',
         tolerance,
         maximum_iterations,
         confidence_level=confidence_level,
+        rN_test=rN_test,
         algorithm=algorithm,
     )
     v_start, delta_start = _initialize_voltage(net, init)
@@ -181,6 +182,7 @@ class StateEstimation:
             maximum_iterations=50,
             algorithm='wls',
             confidence_level=None,
+            rN_test=None,
             logger=None,
             recycle=False
     ):
@@ -194,6 +196,7 @@ class StateEstimation:
             maximum_iterations,
             net,
             confidence_level,
+            rN_test,
             self.logger,
         )
         self.ppc = None
@@ -311,7 +314,8 @@ class StateEstimation:
                 "bad_data_exists": self.solver.bad_data_exists,
                 "num_iterations": self.solver.iterations,
                 "objective_function_value": self.solver.obj_func,
-                "time": now.strftime("%Y-%m-%d %H:%M:%S")}
+                "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "rN": self.solver.rN,}
         else:
             se_results = self.solver.successful
 
