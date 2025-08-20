@@ -4,9 +4,10 @@ from copy import deepcopy
 import networkx as nx
 import numpy as np
 from numpy.testing import assert_array_equal
+import pytest
 
 import pandapower as pp
-from pandapower.observability_analysis.observability_analysis import run_observability_analysis_for_ppnet
+from pandapower.estimation.observability_analysis.observability_analysis import run_observability_analysis_for_ppnet
 
 
 class Test6BusSystem(unittest.TestCase):
@@ -389,3 +390,7 @@ class TestAburBusSystem(unittest.TestCase):
         lines = [0, 1, 2, 3, 4, 5, 6, 7]
         line_obs_result = [-1, 0, 1, -1, -1, 1, -1, -1]
         assert_array_equal(net._observability_lookup['line'][lines], line_obs_result)
+
+if __name__ == '__main__':
+    pytest.main([__file__, "-xs"])
+    

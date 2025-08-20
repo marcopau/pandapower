@@ -13,6 +13,7 @@ from pandapower.estimation.algorithm.matrix_base import BaseAlgebra, \
 from pandapower.estimation.idx_bus import ZERO_INJ_FLAG, P, P_STD, Q, Q_STD
 from pandapower.estimation.ppc_conversion import ExtendedPPCI
 from pandapower.pypower.idx_bus import bus_cols
+from pandapower.estimation.observability_analysis.observability_analysis import run_full_observability
 
 try:
     import pandaplan.core.pplog as logging
@@ -35,7 +36,7 @@ class BaseAlgorithm:
         self.eppci = None
         self.pp_meas_indices = None
 
-    def check_observability(self, eppci: ExtendedPPCI, z):
+    def check_observability_basic(self, eppci: ExtendedPPCI, z):
         # Check if observability criterion is fulfilled and the state estimation is possible
         num_slacks = sum(~eppci.non_slack_bus_mask)
         if len(z) < 2 * eppci["bus"].shape[0] - num_slacks:
@@ -55,11 +56,15 @@ class BaseAlgorithm:
             self.logger.debug("State Estimation not successful ({:d}/{:d} iterations)".format(cur_it,
                                                                                               self.max_iterations))
 
-    def initialize(self, eppci: ExtendedPPCI):
-        # Check observability
+    def initialize(self, eppci: ExtendedPPCI, obs_analysis='basic'):
+        # Check observability 
         self.eppci = eppci
         self.pp_meas_indices = eppci.pp_meas_indices
-        self.check_observability(eppci, eppci.z)
+        if obs_analysis == 'basic':
+            self.check_observability_basic(eppci, eppci.z)
+        else:
+            self.eppci = run_full_observability(self.eppci)
+
 
     def estimate(self, eppci: ExtendedPPCI, **kwargs):
         # Must be implemented individually!!
@@ -80,9 +85,10 @@ class WLSAlgorithm(BaseAlgorithm):
         self.obj_func = None
         logging.basicConfig(level=logging.DEBUG)
 
-    def estimate(self, eppci: ExtendedPPCI, debug_mode=False, **kwargs):
-        self.initialize(eppci)
+    def estimate(self, eppci: ExtendedPPCI, obs_analysis='basic', debug_mode=False, **kwargs):
+        self.initialize(eppci, obs_analysis)
         # matrix calculation object
+        eppci = self.eppci
         sem = BaseAlgebra(eppci)
 
         current_error, cur_it = 100., 0
@@ -175,7 +181,7 @@ class WLSZeroInjectionConstraintsAlgorithm(BaseAlgorithm):
             raise UserWarning("Network has no bus with zero injections! Please use WLS instead!")
         zero_injection_bus = np.argwhere(eppci["bus"][:, bus_cols + ZERO_INJ_FLAG]).ravel()
         eppci["bus"][np.ix_(zero_injection_bus, [bus_cols + P, bus_cols + P_STD, bus_cols + Q, bus_cols + Q_STD])] = np.nan
-        # Withn pq buses with zero injection identify those who have also no p or q measurement
+        # Within pq buses with zero injection identify those who have also no p or q measurement
         p_zero_injections = zero_injection_bus
         q_zero_injections = zero_injection_bus
         new_states = np.zeros(len(p_zero_injections) + len(q_zero_injections))

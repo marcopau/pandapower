@@ -115,7 +115,7 @@ def _map_buses_to_components(eppci: ExtendedPPCI, net: pp.pandapowerNet):
 
     # Group buses by their observable island IDs
     sub_components = defaultdict(list)
-    for ind, value in enumerate(eppci.data['bus'][:, -1]):
+    for ind, value in enumerate(eppci['bus'][:, -1]):
         sub_components[value].append(ind)
 
     # Update observability lookup for each bus group
@@ -135,7 +135,7 @@ def _map_branches_to_components(eppci: ExtendedPPCI, net: pp.pandapowerNet):
 
     # Group branch indices by component ID
     sub_components = defaultdict(list)
-    for ind, value in enumerate(eppci.data['branch'][:, -1]):
+    for ind, value in enumerate(eppci['branch'][:, -1]):
         sub_components[value].append(ind)
 
     # Add branches to the network model based on their component ID
@@ -175,7 +175,7 @@ def add_connected_components_to_eppci(graph: nx.MultiGraph, original_eppci: Exte
     subgraphs = get_components_with_voltage_measurements(graph, original_eppci)
 
     # Add additional column to 'bus'
-    all_bus_idx = np.full(original_eppci.data['bus'].shape[0], -1, dtype=int)
+    all_bus_idx = np.full(original_eppci['bus'].shape[0], -1, dtype=int)
     original_eppci.data['bus'] = np.hstack((original_eppci.data['bus'], all_bus_idx.reshape(-1, 1)))
 
     # Assign each bus to its corresponding observable island

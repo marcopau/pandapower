@@ -5,11 +5,13 @@
 
 import numpy as np
 
-from pandapower.pypower.idx_bus import PD, QD
+from pandapower.pypower.idx_bus import VM, VA, PD, QD
+from pandapower.pypower.idx_brch import PF, QF, PT, QT
 from pandapower.pf.ppci_variables import _get_pf_variables_from_ppci
 from pandapower.pf.pfsoln_numba import pfsoln
 from pandapower.results import _copy_results_ppci_to_ppc, _extract_results_se, init_results
 from pandapower.auxiliary import get_values
+from pandapower.estimation.observability_analysis.results import add_connected_components_to_net
 
 
 def _calc_power_flow(ppci, V):
@@ -21,9 +23,9 @@ def _calc_power_flow(ppci, V):
         pfsoln(baseMVA, bus, gen, branch, svc, tcsc, ssc, vsc, Ybus, Yf, Yt, V, ref, ref_gens)
 
     # calculate bus power injections
-    # Sbus = np.multiply(V, np.conj(Ybus * V)) * baseMVA
-    # ppci["bus"][:, PD] = -Sbus.real  # saved in MW, injection -> demand
-    # ppci["bus"][:, QD] = -Sbus.imag  # saved in Mvar, injection -> demand
+    Sbus = np.multiply(V, np.conj(Ybus * V)) * baseMVA
+    ppci["bus"][:, PD] = -Sbus.real  # saved in MW, injection -> demand
+    ppci["bus"][:, QD] = -Sbus.imag  # saved in Mvar, injection -> demand
     return ppci
 
 
@@ -77,8 +79,36 @@ def _extract_result_ppci_to_pp(net, ppc, ppci):
 
 def eppci2pp(net, ppc, eppci):
     # calculate the branch power flow and bus power injection based on the estimated voltage vector
+    try: 
+        ppci_original = eppci.ppci_original
+    except:
+        ppci_original = None
+
     eppci = _calc_power_flow(eppci, eppci.V)
 
+    if ppci_original != None:
+        bus_lookup = eppci.obs_bus_lookup[eppci.obs_bus_mask]
+        ppci_original["bus"][eppci.obs_bus_mask,2:] = eppci["bus"][bus_lookup,2:]
+
+        branch_lookup = eppci.obs_branch_lookup[eppci.obs_branch_mask]
+        ppci_original["branch"][eppci.obs_branch_mask,2:] = eppci["branch"][branch_lookup,2:]
+
+        # Update data for unobservable buses
+        ppci_original["bus"][~eppci.obs_bus_mask,VM] = np.nan
+        ppci_original["bus"][~eppci.obs_bus_mask,VA] = np.nan
+        ppci_original["bus"][~eppci.obs_bus_mask,PD] = np.nan
+        ppci_original["bus"][~eppci.obs_bus_mask,QD] = np.nan
+
+        # Update data for unobservable branches
+        ppci_original["branch"][~eppci.obs_branch_mask,PF] = np.nan
+        ppci_original["branch"][~eppci.obs_branch_mask,QF] = np.nan
+        ppci_original["branch"][~eppci.obs_branch_mask,PT] = np.nan
+        ppci_original["branch"][~eppci.obs_branch_mask,QT] = np.nan
+    else:
+        ppci_original = eppci
+
     # extract the result from ppci to ppc and pandpower network
-    net = _extract_result_ppci_to_pp(net, ppc, eppci)
+    net = _extract_result_ppci_to_pp(net, ppc, ppci_original)
+    add_connected_components_to_net(ppci_original, net)
+
     return net

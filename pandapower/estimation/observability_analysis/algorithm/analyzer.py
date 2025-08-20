@@ -13,8 +13,8 @@ from scipy.sparse import csr_matrix
 from pandapower.estimation.algorithm.matrix_base import BaseAlgebra
 from pandapower.estimation.idx_brch import P_FROM, P_TO
 from pandapower.estimation.idx_bus import P, P_STD
-from pandapower.observability_analysis.algorithm.network_analysis_core import NetworkAnalysisCore
-from pandapower.observability_analysis.network_utils import get_elements_without_measurements, create_graph_from_eppci
+from pandapower.estimation.observability_analysis.algorithm.network_analysis_core import NetworkAnalysisCore
+from pandapower.estimation.observability_analysis.network_utils import get_elements_without_measurements, create_graph_from_eppci
 from pandapower.pypower.idx_brch import branch_cols
 from pandapower.pypower.idx_bus import bus_cols
 

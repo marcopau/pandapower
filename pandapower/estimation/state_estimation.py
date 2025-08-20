@@ -33,8 +33,8 @@ ALLOWED_OPT_VAR = {"a", "opt_method", "estimator"}
 
 
 def estimate(net, algorithm='wls',
-             init='flat', tolerance=1e-6, maximum_iterations=50,
-             zero_injection='aux_bus', fuse_buses_with_bb_switch='all',
+             init='flat', tolerance=1e-6, maximum_iterations=50, zero_injection='aux_bus', 
+             observability_analysis='basic', fuse_buses_with_bb_switch='all',
              debug_mode=False, **opt_vars):
     """
     Wrapper function for WLS state estimation.
@@ -58,7 +58,7 @@ def estimate(net, algorithm='wls',
 
                 - None: no bus will be identified as zero injection bus
                 - "aux_bus": only aux bus will be identified as zero injection bus
-                - "no_inj_bus": aux bus and bus without p,q measurement and without any connected injection (load, sgen...) \
+                - "no_inj_bus": aux bus and buses without any connected injection (load, sgen...) \
                         will be identified as zero injection bus
                 - "zero_pwr_bus": aux bus and all bus without p,q measurement that have either no connected injection \
                         (load, sgen...) or a connected injection (load, sgen...) equal to zero will be identified as \
@@ -66,6 +66,15 @@ def estimate(net, algorithm='wls',
                 - iterable: the iterable should contain index of the zero injection bus and also aux bus will be identified \
                     as zero-injection bus
 
+        **observability_analysis** (str) - Defines the type of observability analysis to be performed before running the \
+                state estimation. Two options are possible: 
+
+                - "basic" (default): it simply checks the number of available measurements and raises a warning if this \
+                        number is lower than the number of state variables to be estimated
+                - "full": it refers to a more detailed observability analysis, where a topological analysis is \
+                        conducted to verify grid observability and, in case of unobservability, to identify the \
+                        observable islands
+ 
         **fuse_buses_with_bb_switch** (str, iterable, None) - Defines how buses with closed bb switches should \
             be handled, if fuse buses will only fused to one for calculation, if not fuse, an auxiliary bus and \
             auxiliary line will be automatically added to the network to make the buses with different p,q injection \
@@ -87,7 +96,7 @@ def estimate(net, algorithm='wls',
     se = StateEstimation(net, tolerance, maximum_iterations, algorithm=algorithm)
     v_start, delta_start = _initialize_voltage(net, init)
     return se.estimate(v_start=v_start, delta_start=delta_start,
-                       zero_injection=zero_injection,
+                       zero_injection=zero_injection, obs_analysis=observability_analysis,
                        fuse_buses_with_bb_switch=fuse_buses_with_bb_switch, 
                        algorithm=algorithm, debug_mode=debug_mode, **opt_vars)
 
@@ -121,7 +130,7 @@ def remove_bad_data(net, init='flat', tolerance=1e-6, maximum_iterations=10,
         **successful** (boolean) - Was the state estimation successful?
     """
     wls_se = StateEstimation(net, tolerance, maximum_iterations, algorithm="wls")
-    v_start, delta_start = _initialize_voltage(net, init, calculate_voltage_angles)
+    v_start, delta_start = _initialize_voltage(net, init)
     return wls_se.perform_rn_max_test(v_start, delta_start, calculate_voltage_angles,
                                       rn_max_threshold)
 
@@ -154,7 +163,7 @@ def chi2_analysis(net, init='flat', tolerance=1e-6, maximum_iterations=10,
         **bad_data_detected** (boolean) - Returns true if bad data has been detected
     """
     wls_se = StateEstimation(net, tolerance, maximum_iterations, algorithm="wls")
-    v_start, delta_start = _initialize_voltage(net, init, calculate_voltage_angles)
+    v_start, delta_start = _initialize_voltage(net, init)
     return wls_se.perform_chi2_test(v_start, delta_start, calculate_voltage_angles,
                                     chi2_prob_false)
 
@@ -184,7 +193,7 @@ class StateEstimation:
         self.delta = None
         self.bad_data_present = None
 
-    def estimate(self, v_start='flat', delta_start='flat', zero_injection=None, 
+    def estimate(self, v_start='flat', delta_start='flat', zero_injection=None, obs_analysis='basic',
                  fuse_buses_with_bb_switch='all', algorithm='wls', debug_mode=False, **opt_vars):
         """
         The function estimate is the main function of the module. It takes the inputs
@@ -214,12 +223,23 @@ class StateEstimation:
             **zero_injection** - (str, iterable, None) - Defines which buses are zero injection bus or the method
             to identify zero injection bus, with 'wls_estimator' virtual measurements will be added, with
             'wls_estimator with zero constraints' the buses will be handled as constraints.
-                "auto": all bus without p,q measurement, without p, q value (load, sgen...) + aux buses will be
-                identified as zero injection bus
-                "aux_bus": only aux bus will be identified as zero injection bus
-                None: no bus will be identified as zero injection bus
-                iterable: the iterable should contain index of the zero injection bus and also aux bus will be identified
-                as zero-injection bus
+                - None: no bus will be identified as zero injection bus
+                - "aux_bus": only aux bus will be identified as zero injection bus
+                - "no_inj_bus": aux bus and buses without any connected injection (load, sgen...) \
+                        will be identified as zero injection bus
+                - "zero_pwr_bus": aux bus and all bus without p,q measurement that have either no connected injection \
+                        (load, sgen...) or a connected injection (load, sgen...) equal to zero will be identified as \
+                        zero injection bus
+                - iterable: the iterable should contain index of the zero injection bus and also aux bus will be identified \
+                    as zero-injection bus
+
+            **obs_analysis** (str) - Defines the type of observability analysis to be performed before running the \
+                state estimation. Two options are possible: 
+                - "basic" (default): it simply checks the number of available measurements and raises a warning if this \
+                        number is lower than the number of state variables to be estimated
+                - "full": it refers to a more detailed observability analysis, where a topological analysis is \
+                        conducted to verify grid observability and, in case of unobservability, to identify the \
+                        observable islands
 
             **fuse_buses_with_bb_switch** - (str, iterable, None) - Defines how buses with closed bb switches should
             be handled, if fuse buses will only fused to one for calculation, if not fuse, an auxiliary bus and
@@ -264,7 +284,7 @@ class StateEstimation:
                                                   ppc=self.ppc, eppci=self.eppci)
 
         # Estimate voltage magnitude and angle with the given estimator
-        self.eppci = self.solver.estimate(self.eppci, debug_mode=debug_mode, **opt_vars)
+        self.eppci = self.solver.estimate(self.eppci, obs_analysis=obs_analysis, debug_mode=debug_mode, **opt_vars)
 
         if self.solver.successful:
             self.net = eppci2pp(self.net, self.ppc, self.eppci)

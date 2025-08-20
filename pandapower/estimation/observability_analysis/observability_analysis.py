@@ -4,9 +4,34 @@
 # Contributions made on 2025.
 
 import pandapower as pp
+import networkx as nx
+import numpy as np
 from pandapower.estimation.ppc_conversion import ExtendedPPCI, pp2eppci
-from pandapower.observability_analysis.algorithm.analyzer import ObservabilityAnalyzer
-from pandapower.observability_analysis.results import add_connected_components_to_eppci, add_connected_components_to_net
+from pandapower.estimation.observability_analysis.algorithm.analyzer import ObservabilityAnalyzer
+from pandapower.estimation.observability_analysis.results import add_connected_components_to_eppci, add_connected_components_to_net
+from copy import deepcopy
+
+try:
+    import pandaplan.core.pplog as logging
+except ImportError:
+    import logging
+std_logger = logging.getLogger(__name__)
+
+
+def run_full_observability(eppci):
+
+    graph = run_observability_analysis_for_eppci(eppci)
+    connected_components = list(sorted(nx.connected_components(graph), key=len, reverse=True))
+
+    num_islands = len(connected_components)
+    if num_islands > 1:
+        std_logger.warning("Attention: multiple islands " \
+        "have been identified. State estimation will be run on each observable island of the grid.")
+        for i in range(num_islands):
+            eppci = define_slack_on_islands(eppci, connected_components[i])
+        eppci = adjust_eppci_for_observable_islands(eppci.data, eppci.algorithm)
+
+    return eppci
 
 
 def run_observability_analysis_for_eppci(eppci: ExtendedPPCI):
@@ -30,6 +55,48 @@ def run_observability_analysis_for_eppci(eppci: ExtendedPPCI):
     add_connected_components_to_eppci(graph, eppci)
 
     return graph
+
+
+def adjust_eppci_for_observable_islands(ppci, algorithm):
+
+    ppci_new = deepcopy(ppci)
+
+    obs_buses = ppci["bus"][:,-1] != -1
+    obs_branches = ppci["branch"][:,-1] != -1
+    
+    ppci_new["bus"] = ppci_new["bus"][obs_buses,:]
+    ppci_new["branch"] = ppci_new["branch"][obs_branches,:]
+
+    eppci = ExtendedPPCI(ppci_new,algorithm)
+    
+    eppci["bus"][:,0] = np.arange(len(ppci_new["bus"]))
+    eppci.obs_bus_mask = obs_buses
+    eppci.obs_bus_lookup = -np.ones(len(obs_buses), dtype=int)
+    eppci.obs_bus_lookup[obs_buses] = np.arange(len(eppci["bus"]))
+
+    from_indexes = eppci["branch"][:,0].astype(int)
+    # int_from_indexes = [int(x) for x in from_indexes]
+    to_indexes = eppci["branch"][:,1].astype(int)
+    # int_to_indexes = [int(x) for x in to_indexes]
+    
+    eppci["branch"][:,0] = eppci.obs_bus_lookup[from_indexes]
+    eppci["branch"][:,1] = eppci.obs_bus_lookup[to_indexes]
+    eppci.obs_branch_mask = obs_branches
+    eppci.obs_branch_lookup = -np.ones(len(obs_branches), dtype=int)
+    eppci.obs_branch_lookup[obs_branches] = np.arange(len(eppci["branch"]))
+
+    eppci.ppci_original = ppci
+
+    return eppci
+
+
+def define_slack_on_islands(eppci, connected_components):
+    buses_island = list(connected_components)
+    bus_type = eppci["bus"][buses_island,1]
+    if ~(bus_type==3).any():
+        eppci["bus"][buses_island[0],1] = 3
+    return eppci
+
 
 def run_observability_analysis_for_ppnet(
         net: pp.pandapowerNet,
