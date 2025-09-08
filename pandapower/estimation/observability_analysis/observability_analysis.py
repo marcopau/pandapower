@@ -63,9 +63,11 @@ def adjust_eppci_for_observable_islands(ppci, algorithm):
 
     obs_buses = ppci["bus"][:,-1] != -1
     obs_branches = ppci["branch"][:,-1] != -1
+    obs_gens = obs_buses[ppci["gen"][:,0].astype(int)]
     
     ppci_new["bus"] = ppci_new["bus"][obs_buses,:]
     ppci_new["branch"] = ppci_new["branch"][obs_branches,:]
+    ppci_new["gen"] = ppci_new["gen"][obs_gens,:]
 
     eppci = ExtendedPPCI(ppci_new,algorithm)
     
@@ -75,15 +77,15 @@ def adjust_eppci_for_observable_islands(ppci, algorithm):
     eppci.obs_bus_lookup[obs_buses] = np.arange(len(eppci["bus"]))
 
     from_indexes = eppci["branch"][:,0].astype(int)
-    # int_from_indexes = [int(x) for x in from_indexes]
     to_indexes = eppci["branch"][:,1].astype(int)
-    # int_to_indexes = [int(x) for x in to_indexes]
     
     eppci["branch"][:,0] = eppci.obs_bus_lookup[from_indexes]
     eppci["branch"][:,1] = eppci.obs_bus_lookup[to_indexes]
     eppci.obs_branch_mask = obs_branches
     eppci.obs_branch_lookup = -np.ones(len(obs_branches), dtype=int)
     eppci.obs_branch_lookup[obs_branches] = np.arange(len(eppci["branch"]))
+
+    eppci["gen"][:,0] = eppci.obs_bus_lookup[eppci["gen"][:,0].astype(int)]
 
     eppci.ppci_original = ppci
 

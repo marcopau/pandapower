@@ -842,7 +842,6 @@ def test_zero_injection_aux_bus():
     assert ~np.allclose(net.res_bus_est.vm_pu.values, net_aux.res_bus_est.vm_pu.values, 1e-2, equal_nan=True)
 
 
-@pytest.mark.xfail
 def test_net_unobserved_island():
     net = create_empty_network()
     bus1 = create_bus(net, name="bus1", vn_kv=10.)
@@ -863,8 +862,8 @@ def test_net_unobserved_island():
     # Created bb switch
     runpp(net, calculate_voltage_angles=True)
 
-    create_measurement(net, "v", "bus", r2(net.res_bus.vm_pu.iloc[bus1], .002), .002, element=bus1)
-    create_measurement(net, "v", "bus", r2(net.res_bus.vm_pu.iloc[bus4], .002), .002, element=bus4)
+    create_measurement(net, "v", "bus", r2(net.res_bus.vm_pu.iloc[bus1], .001), .002, element=bus1)
+    create_measurement(net, "v", "bus", r2(net.res_bus.vm_pu.iloc[bus4], .001), .002, element=bus4)
 
     create_measurement(net, "p", "bus", r2(net.res_bus.p_mw.iloc[bus4], .002), .002, element=bus4)
     create_measurement(net, "q", "bus", r2(net.res_bus.q_mvar.iloc[bus4], .002), .002, element=bus4)
@@ -883,8 +882,11 @@ def test_net_unobserved_island():
     create_measurement(net, "q", "trafo", r2(net.res_trafo.q_hv_mvar.iloc[0], .001), .01,
                        side="hv", element=0)
 
-    if not estimate(net, tolerance=1e-6, zero_injection=None):
-        raise AssertionError("Estimation failed!")
+    estimate(net, tolerance=1e-6, zero_injection=None, observability_analysis="full")
+    
+    # 0, 1, 3 are the observable buses
+    assert np.allclose(net.res_bus.va_degree.values[[0,1,3]], net.res_bus_est.va_degree.values[[0,1,3]], 1e-3)
+    assert np.allclose(net.res_bus.vm_pu.values[[0,1,3]], net.res_bus_est.vm_pu.values[[0,1,3]], 1e-3)
 
 
 def test_net_oos_line():
