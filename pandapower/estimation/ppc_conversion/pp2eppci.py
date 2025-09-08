@@ -69,15 +69,15 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     # Convert current (i) measurements to p.u.
     i_meas = meas.query("measurement_type=='i'")
     if not i_meas.empty:
-        # Convert side from string to bus id
-        i_meas["side"] = i_meas.apply(lambda row:
-                                      net['line'].at[row["element"], row["side"] + "_bus"] if
-                                      row["side"] in ("from", "to") else
-                                      net[row["element_type"]].at[row["element"], row["side"] + '_bus'] if
-                                      row["side"] in ("hv", "mv", "lv") else row["side"], axis=1)
-        base_i_ka = ppci["baseMVA"] / i_meas.side.map(net.bus.vn_kv)
-        meas.loc[i_meas.index, "value"] /= base_i_ka / np.sqrt(3)
-        meas.loc[i_meas.index, "std_dev"] /= base_i_ka / np.sqrt(3)
+        # # Convert side from string to bus id
+        # i_meas["side"] = i_meas.apply(lambda row:
+        #                               net['line'].at[row["element"], row["side"] + "_bus"] if
+        #                               row["side"] in ("from", "to") else
+        #                               net[row["element_type"]].at[row["element"], row["side"] + '_bus'] if
+        #                               row["side"] in ("hv", "mv", "lv") else row["side"], axis=1)
+        base_i_ka = ppci["baseMVA"] / i_meas.side.map(net.bus.vn_kv) / np.sqrt(3)
+        meas.loc[i_meas.index, "value"] /= base_i_ka 
+        meas.loc[i_meas.index, "std_dev"] /= base_i_ka
 
     # Convert angle measurements (va) from degrees to radians
     meas_dg_mask = (meas.measurement_type == 'va')
@@ -118,10 +118,19 @@ def _add_measurements_to_ppci(net, ppci, zero_injection, algorithm):
     branch_append = np.full((ppci["branch"].shape[0], branch_cols_se), np.nan, dtype=ppci["branch"].dtype)
     br_is_mask = ppci['internal']['branch_is']
 
+    # Convert side of line measurements into "from" or "to"
+    meas_line = meas[(meas['element_type'] == 'line')]
+    meas_trafo = meas[(meas['element_type'] == 'trafo')]
+    meas_trafo3w = meas[(meas['element_type'] == 'trafo3w')]
+
+    meas_line = convert_meas_side_into_string(net, meas_line, "line", "from", "to")
+    meas_trafo = convert_meas_side_into_string(net, meas_trafo, "trafo", "hv", "lv")
+    meas_trafo3w = convert_meas_side_into_string(net, meas_trafo3w, "trafo3w", "hv", "lv")
+
     # Add line, trafo, and trafo3w measurements
-    _add_measurements_to_line(net, branch_append, meas, br_is_mask)
-    _add_measurements_to_trafo(net, branch_append, meas, br_is_mask)
-    _add_measurements_to_trafo3w(net, branch_append, meas, br_is_mask)
+    _add_measurements_to_line(net, branch_append, meas_line, br_is_mask)
+    _add_measurements_to_trafo(net, branch_append, meas_trafo, br_is_mask)
+    _add_measurements_to_trafo3w(net, branch_append, meas_trafo3w, br_is_mask)
 
     # Integrate new measurement columns into ppci bus matrix
     if ppci["bus"].shape[1] == bus_cols:
@@ -158,3 +167,29 @@ def pp2eppci(net, v_start=None, delta_start=None,
         # Finished converting pandapower network to ppci
         ppci = _add_measurements_to_ppci(net, ppci, zero_injection, algorithm)
         return net, ppc, ExtendedPPCI(ppci, algorithm)
+    
+
+def convert_meas_side_into_string(net, meas, element, fr, to):
+    if len(meas) == 0:
+        return meas
+    from_list = net[element].loc[meas["element"].values, fr + "_bus"]
+    to_list = net[element].loc[meas["element"].values, to + "_bus"]
+    from_boolean = meas["side"].values == from_list.values
+    to_boolean = meas["side"].values == to_list.values
+    meas.loc[from_boolean,"side"] = fr
+    meas.loc[to_boolean,"side"] = to
+    if element == "trafo3w":
+        mv_list = net[element].loc[meas["element"].values, "mv_bus"]
+        mv_boolean = meas["side"].values == mv_list.values
+        meas.loc[mv_boolean,"side"] = "mv"
+        not_mapped_meas = (meas["side"] != fr) & (meas["side"] != to) & (meas["side"] != "mv")
+    else:
+        not_mapped_meas = (meas["side"] != fr) & (meas["side"] != to)
+
+    if not_mapped_meas.any():
+        std_logger.warning("The following measurements are not correctly set and are removed from the measurement list: " + meas[not_mapped_meas].to_string())
+        # print("The following measurements are not correctly set and are removed from the measurement list: ")
+        # print(meas[not_mapped_meas])
+        meas.drop(meas.index[not_mapped_meas], inplace=True)
+
+    return meas
