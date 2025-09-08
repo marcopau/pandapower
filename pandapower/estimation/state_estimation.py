@@ -287,7 +287,7 @@ class StateEstimation:
         self.eppci = self.solver.estimate(self.eppci, obs_analysis=obs_analysis, debug_mode=debug_mode, **opt_vars)
 
         if self.solver.successful:
-            self.net = eppci2pp(self.net, self.ppc, self.eppci)
+            self.net = eppci2pp(self.net, self.ppc, self.eppci, obs_analysis)
             if self.algorithm == "af-wls":
                 self.net["res_cluster_est"] = self.eppci.clusters
         else:

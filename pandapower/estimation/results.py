@@ -77,7 +77,7 @@ def _extract_result_ppci_to_pp(net, ppc, ppci):
     return net
 
 
-def eppci2pp(net, ppc, eppci):
+def eppci2pp(net, ppc, eppci, obs_analysis="basic"):
     # calculate the branch power flow and bus power injection based on the estimated voltage vector
     try: 
         ppci_original = eppci.ppci_original
@@ -109,6 +109,7 @@ def eppci2pp(net, ppc, eppci):
 
     # extract the result from ppci to ppc and pandpower network
     net = _extract_result_ppci_to_pp(net, ppc, ppci_original)
-    add_connected_components_to_net(ppci_original, net)
+    if obs_analysis == "full":
+        add_connected_components_to_net(ppci_original, net)
 
     return net
