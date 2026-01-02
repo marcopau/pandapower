@@ -87,6 +87,27 @@ def _map_branches_to_trafo3w(net: pp.pandapowerNet, component_id, component_bran
     # Update observability lookup with component ID
     net._observability_lookup["trafo3w"][list(trafo3w_hv_net.index)] = component_id
 
+def _map_branches_to_impedance(net: pp.pandapowerNet, component_id, component_branches):
+    """
+    Assign impedance branches of a component to the observability structure in the network.
+    """
+
+    if "branch" not in net._pd2ppc_lookups or "impedance" not in net._pd2ppc_lookups["branch"]:
+        return
+
+    imp_index_from, imp_index_to = net._pd2ppc_lookups["branch"]["impedance"]
+
+    # Indices in the eppci "branch" matrix that belong to impedances
+    imp_eppci_idx = [i - imp_index_from for i in component_branches if imp_index_from <= i < imp_index_to]
+    if not imp_eppci_idx:
+        return
+
+    # Extract impedance network indices
+    imp_net = net.impedance.iloc[imp_eppci_idx]
+
+    # Update observability lookup with component ID
+    net._observability_lookup["impedance"][list(imp_net.index)] = component_id
+
 
 def create_lookup(element):
     return np.full(max(element.index) + 1, -1, dtype=int) if not element.empty else np.array([], dtype=int)
@@ -97,6 +118,7 @@ def _init_observability_lookup(net):
         "line": create_lookup(net.line),
         "trafo": create_lookup(net.trafo),
         "trafo3w": create_lookup(net.trafo3w),
+        "impedance": create_lookup(net.impedance),
         "bus": create_lookup(net.bus),
     }
 
@@ -143,6 +165,7 @@ def _map_branches_to_components(eppci: ExtendedPPCI, net: pp.pandapowerNet):
         _map_branches_to_lines(net, component_id, node_buses)
         _map_branches_to_trafo(net, component_id, node_buses)
         _map_branches_to_trafo3w(net, component_id, node_buses)
+        _map_branches_to_impedance(net, component_id, node_buses)
 
 
 def add_connected_components_to_net(eppci: ExtendedPPCI, net: pp.pandapowerNet):

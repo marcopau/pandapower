@@ -391,6 +391,100 @@ class TestAburBusSystem(unittest.TestCase):
         line_obs_result = [-1, 0, 1, -1, -1, 1, -1, -1]
         assert_array_equal(net._observability_lookup['line'][lines], line_obs_result)
 
+
+class TestImpedanceSystem(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        net = pp.create_empty_network(sn_mva=100.0)
+
+        # --- Buses ---
+        b0 = pp.create_bus(net, vn_kv=110, name="HV Slack")
+        b1 = pp.create_bus(net, vn_kv=110, name="B1")
+        b2 = pp.create_bus(net, vn_kv=110, name="B2")
+        b3 = pp.create_bus(net, vn_kv=110, name="B3")
+        b4 = pp.create_bus(net, vn_kv=110, name="B4")
+
+        # --- Slack / sources ---
+        pp.create_ext_grid(net, bus=b0, vm_pu=1.02, name="Grid")
+
+        # --- Loads / gen ---
+        pp.create_load(net, bus=b2, p_mw=25.0, q_mvar=8.0, name="Load B2")
+        pp.create_load(net, bus=b3, p_mw=18.0, q_mvar=6.0, name="Load B3")
+        pp.create_sgen(net, bus=b4, p_mw=8.0, q_mvar=0.0, name="PV B4")  # static gen
+
+        # --- Lines ---
+        # Use a standard type so impedance params are realistic
+        std_type = "149-AL1/24-ST1A 110.0"
+        if std_type not in net.std_types["line"]:
+            # fallback that exists in many installs
+            std_type = list(net.std_types["line"].keys())[0]
+
+        pp.create_line(net, from_bus=b0, to_bus=b1, length_km=10.0, std_type=std_type, name="L01")
+        pp.create_line(net, from_bus=b1, to_bus=b2, length_km=12.0, std_type=std_type, name="L12")
+        pp.create_line(net, from_bus=b2, to_bus=b3, length_km=7.0, std_type=std_type, name="L23")
+
+        # --- Impedance branch (between B1 and B4) ---
+        # This creates an additional branch element in ppc ("impedance")
+        pp.create_impedance(
+            net,
+            from_bus=b1,
+            to_bus=b4,
+            rft_pu=0.01, xft_pu=0.08,  # series impedance (from->to)
+            rtf_pu=0.01, xtf_pu=0.08,  # series impedance (to->from) - usually same
+            sn_mva=100.0,
+            name="Z14"
+        )
+        cls.net = net
+
+    def test_observability(self):
+        net = deepcopy(self.net)
+
+        pp.create_measurement(net, "v", "bus", 1.0, 0.01, element=0)
+        pp.create_measurement(net, "v", "bus", 1.0, 0.01, element=3)
+
+        pp.create_measurement(net, "p", "bus", 1.0, 1, element=2)
+        pp.create_measurement(net, "q", "bus", 1.0, 1, element=2)
+
+        pp.create_measurement(net, "p", "bus", 1.0, 1, element=3)
+        pp.create_measurement(net, "q", "bus", 1.0, 1, element=3)
+
+        graph = run_observability_analysis_for_ppnet(net, zero_injection="no_inj_bus")
+        connected_components = list(sorted(nx.connected_components(graph), key=len, reverse=True))
+        self.assertEqual(len(connected_components), 3)
+
+        buses = [0, 1, 2, 3, 4]
+        bus_obs_result = [-1, 0, 0, 0, -1]
+        assert_array_equal(net._observability_lookup['bus'][buses], bus_obs_result)
+
+        lines = [0, 1, 2]
+        line_obs_result = [-1, 0, 0]
+        assert_array_equal(net._observability_lookup['line'][lines], line_obs_result)
+
+        impedances = [0]
+        impedance_obs_result = [-1]
+        assert_array_equal(net._observability_lookup['impedance'][impedances], impedance_obs_result)
+
+        # make system fully obs.
+        pp.create_measurement(net, "p", "bus", 1.0, 1, element=4)
+        pp.create_measurement(net, "q", "bus", 1.0, 1, element=4)
+
+        graph = run_observability_analysis_for_ppnet(net, zero_injection="no_inj_bus")
+        connected_components = list(sorted(nx.connected_components(graph), key=len, reverse=True))
+        self.assertEqual(len(connected_components), 1)
+
+
+        buses = [0, 1, 2, 3, 4]
+        bus_obs_result = [0, 0, 0, 0, 0]
+        assert_array_equal(net._observability_lookup['bus'][buses], bus_obs_result)
+
+        lines = [0, 1, 2]
+        line_obs_result = [0, 0, 0]
+        assert_array_equal(net._observability_lookup['line'][lines], line_obs_result)
+
+        impedances = [0]
+        impedance_obs_result = [0]
+        assert_array_equal(net._observability_lookup['impedance'][impedances], impedance_obs_result)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, "-xs"])
-    
