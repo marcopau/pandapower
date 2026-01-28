@@ -420,7 +420,7 @@ class TestImpedanceSystem(unittest.TestCase):
             std_type = list(net.std_types["line"].keys())[0]
 
         pp.create_line(net, from_bus=b0, to_bus=b1, length_km=10.0, std_type=std_type, name="L01")
-        pp.create_line(net, from_bus=b1, to_bus=b2, length_km=12.0, std_type=std_type, name="L12")
+        # pp.create_line(net, from_bus=b1, to_bus=b2, length_km=12.0, std_type=std_type, name="L12")
         pp.create_line(net, from_bus=b2, to_bus=b3, length_km=7.0, std_type=std_type, name="L23")
 
         # --- Impedance branch (between B1 and B4) ---
@@ -433,6 +433,17 @@ class TestImpedanceSystem(unittest.TestCase):
             rtf_pu=0.01, xtf_pu=0.08,  # series impedance (to->from) - usually same
             sn_mva=100.0,
             name="Z14"
+        )
+
+        # --- Impedance branch (between B1 and B2) ---
+        pp.create_impedance(
+            net,
+            from_bus=b1,
+            to_bus=b2,
+            rft_pu=0.01, xft_pu=0.08,  # series impedance (from->to)
+            rtf_pu=0.01, xtf_pu=0.08,  # series impedance (to->from) - usually same
+            sn_mva=100.0,
+            name="Z12"
         )
         cls.net = net
 
@@ -456,12 +467,12 @@ class TestImpedanceSystem(unittest.TestCase):
         bus_obs_result = [-1, 0, 0, 0, -1]
         assert_array_equal(net._observability_lookup['bus'][buses], bus_obs_result)
 
-        lines = [0, 1, 2]
-        line_obs_result = [-1, 0, 0]
+        lines = [0, 1]
+        line_obs_result = [-1, 0]
         assert_array_equal(net._observability_lookup['line'][lines], line_obs_result)
 
-        impedances = [0]
-        impedance_obs_result = [-1]
+        impedances = [0, 1]
+        impedance_obs_result = [-1, 0]
         assert_array_equal(net._observability_lookup['impedance'][impedances], impedance_obs_result)
 
         # make system fully obs.
@@ -477,12 +488,12 @@ class TestImpedanceSystem(unittest.TestCase):
         bus_obs_result = [0, 0, 0, 0, 0]
         assert_array_equal(net._observability_lookup['bus'][buses], bus_obs_result)
 
-        lines = [0, 1, 2]
-        line_obs_result = [0, 0, 0]
+        lines = [0, 1]
+        line_obs_result = [0, 0]
         assert_array_equal(net._observability_lookup['line'][lines], line_obs_result)
 
-        impedances = [0]
-        impedance_obs_result = [0]
+        impedances = [0, 1]
+        impedance_obs_result = [0, 0]
         assert_array_equal(net._observability_lookup['impedance'][impedances], impedance_obs_result)
 
 
