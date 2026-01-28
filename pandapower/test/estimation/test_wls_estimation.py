@@ -30,8 +30,8 @@ def test_2bus():
     create_line_from_parameters(net, 0, 1, 1, r_ohm_per_km=1, x_ohm_per_km=0.5,
                                 c_nf_per_km=0, max_i_ka=1)
 
-    create_measurement(net, "p", "line", 0.0111, 0.05, 0, 0)  # p12
-    create_measurement(net, "q", "line", 0.06, 0.05, 0, 0)  # q12
+    create_measurement(net, "p", "line", 0.0111, 0.05, 0, "from")  # p12
+    create_measurement(net, "q", "line", 0.06, 0.05, 0, "from")  # q12
 
     create_measurement(net, "v", "bus", 1.019, 0.01, 0)  # u1
     create_measurement(net, "v", "bus", 1.04, 0.01, 1)  # u2
@@ -66,8 +66,8 @@ def test_3bus():
     create_line_from_parameters(net, 1, 2, 1, r_ohm_per_km=1, x_ohm_per_km=0.6, c_nf_per_km=0,
                                 max_i_ka=1)
 
-    create_measurement(net, "p", "line", -0.0011, 0.01, 0, 0)  # p12
-    create_measurement(net, "q", "line", 0.024, 0.01, 0, 0)  # q12
+    create_measurement(net, "p", "line", -0.0011, 0.01, 0, "from")  # p12
+    create_measurement(net, "q", "line", 0.024, 0.01, 0, "from")  # q12
 
     create_measurement(net, "p", "bus", -0.018, 0.01, 2)  # p3
     create_measurement(net, "q", "bus", 0.1, 0.01, 2)  # q3
@@ -111,7 +111,7 @@ def test_3bus_with_bad_data():
     create_line_from_parameters(net, 1, 2, 1, r_ohm_per_km=1, x_ohm_per_km=0.6, c_nf_per_km=0,
                                 max_i_ka=1)
 
-    create_measurement(net, "p", "line", -0.0011, 0.01, 0, 0)  # p12
+    create_measurement(net, "p", "line", -0.0011, 0.01, 0, "from")  # p12
     create_measurement(net, "q", "line", 0.024, 0.01, 0, "from")  # q12
 
     create_measurement(net, "p", "bus", -0.018, 0.01, 2)  # p3
@@ -175,10 +175,10 @@ def test_3bus_with_out_of_service_bus():
     create_measurement(net, "p", "bus", .501, .010, 1)  # P at bus 2
     create_measurement(net, "q", "bus", .286, .010, 1)  # Q at bus 2
 
-    create_measurement(net, "p", "line", .888, .008, 0, 0)  # Pline (bus 1 -> bus 2) at bus 1
+    create_measurement(net, "p", "line", .888, .008, 0, "from")  # Pline (bus 1 -> bus 2) at bus 1
     create_measurement(net, "p", "line", 1.173, .008, 1, "from")  # Pline (bus 1 -> bus 3) at bus 1
     create_measurement(net, "q", "line", .568, .008, 0, "from")  # Qline (bus 1 -> bus 2) at bus 1
-    create_measurement(net, "q", "line", .663, .008, 1, 0)  # Qline (bus 1 -> bus 3) at bus 1
+    create_measurement(net, "q", "line", .663, .008, 1, "from")  # Qline (bus 1 -> bus 3) at bus 1
 
     # 2. Do state estimation
     if not estimate(net, init='flat'):
@@ -239,8 +239,8 @@ def test_3bus_with_transformer():
     create_measurement(net, "p", "bus", 0., 0.001, element=0)
     create_measurement(net, "q", "bus", 0., 0.001, element=0)
 
-    create_measurement(net, "p", "line", r2(net.res_line.p_from_mw.iloc[0], .008), .008, 0, 0)
-    create_measurement(net, "p", "line", r2(net.res_line.p_from_mw.iloc[1], .008), .008, 1, 0)
+    create_measurement(net, "p", "line", r2(net.res_line.p_from_mw.iloc[0], .008), .008, 0, "from")
+    create_measurement(net, "p", "line", r2(net.res_line.p_from_mw.iloc[1], .008), .008, 1, "from")
 
     create_measurement(net, "p", "trafo", r2(net.res_trafo.p_hv_mw.iloc[0], .01), .01,
                        side="hv", element=0)  # transformer meas.
@@ -292,10 +292,10 @@ def test_3bus_with_2_slacks():
     create_measurement(net, "p", "bus", .501, .010, element=6)  # P at bus 6
     create_measurement(net, "q", "bus", .286, .010, element=6)  # Q at bus 6
 
-    create_measurement(net, "p", "line", .888, .008, 3, 5)  # Pline (bus 5 -> bus 6) at bus 5
-    create_measurement(net, "p", "line", 1.173, .008, 4, 5)  # Pline (bus 5 -> bus 7) at bus 5
+    create_measurement(net, "p", "line", .888, .008, 3, "from")  # Pline (bus 5 -> bus 6) at bus 5
+    create_measurement(net, "p", "line", 1.173, .008, 4, "from")  # Pline (bus 5 -> bus 7) at bus 5
     create_measurement(net, "q", "line", .568, .008, 3, "from")  # Qline (bus 5 -> bus 6) at bus 5
-    create_measurement(net, "q", "line", .663, .008, 4, 5)  # Qline (bus 5 -> bus 7) at bus 5
+    create_measurement(net, "q", "line", .663, .008, 4, "from")  # Qline (bus 5 -> bus 7) at bus 5
 
     # 2. Do state estimation
     if not estimate(net, init='flat', maximum_iterations=10):
@@ -332,9 +332,9 @@ def test_3bus_with_i_line_measurements():
     create_measurement(net, "p", "line", net.res_line.p_from_mw[0] * r(),
                        max(1.0e-3, abs(0.03 * net.res_line.p_from_mw[0])), element=0, side="from")
     create_measurement(net, "q", "line", net.res_line.q_from_mvar[0] * r(),
-                       max(1.0e-3, abs(0.03 * net.res_line.q_from_mvar[0])), element=0, side=0)
+                       max(1.0e-3, abs(0.03 * net.res_line.q_from_mvar[0])), element=0, side="from")
     create_measurement(net, "i", "line", net.res_line.i_from_ka[0] * 1e3 * r(),
-                       max(1.0, abs(30 * net.res_line.i_from_ka[0])), element=0, side=0)
+                       max(1.0, abs(30 * net.res_line.i_from_ka[0])), element=0, side="from")
     create_measurement(net, "i", "line", net.res_line.i_from_ka[1] * 1e3 * r(),
                        max(1.0, abs(30 * net.res_line.i_from_ka[1])), element=1, side="from")
 
@@ -367,9 +367,9 @@ def test_3bus_with_pq_line_from_to_measurements():
     create_measurement(net, "q", "line", net.res_line.q_from_mvar[0] * r(),
                        max(1.0e-3, abs(0.03 * net.res_line.q_from_mvar[0])), element=0, side="from")
     create_measurement(net, "p", "line", net.res_line.p_to_mw[0] * r(),
-                       max(1.0e-3, abs(0.03 * net.res_line.p_to_mw[0])), element=0, side=1)
+                       max(1.0e-3, abs(0.03 * net.res_line.p_to_mw[0])), element=0, side="to")
     create_measurement(net, "q", "line", net.res_line.q_to_mvar[0] * r(),
-                       max(1.0e-3, abs(0.03 * net.res_line.q_to_mvar[0])), element=0, side=1)
+                       max(1.0e-3, abs(0.03 * net.res_line.q_to_mvar[0])), element=0, side="to")
 
     if not estimate(net, init='flat'):
         raise AssertionError("Estimation failed!")
@@ -525,12 +525,12 @@ def test_init_slack_with_multiple_transformers():
                            bus)
         create_measurement(net, "q", "bus", row.q_mvar * r(), max(.0001, abs(0.03 * row.q_mvar)),
                            bus)
-    create_measurement(net, "p", "line", net.res_line.p_from_mw[0], .01, side=1, element=0)
+    create_measurement(net, "p", "line", net.res_line.p_from_mw[0], .01, side="from", element=0)
     create_measurement(net, "q", "line", net.res_line.q_from_mvar[0], 0.01, side="from", element=0)
-    create_measurement(net, "p", "line", net.res_line.p_from_mw[2], .01, side=4, element=2)
+    create_measurement(net, "p", "line", net.res_line.p_from_mw[2], .01, side="from", element=2)
     create_measurement(net, "q", "line", net.res_line.q_from_mvar[2], .01, side="from", element=2)
-    create_measurement(net, "p", "line", net.res_line.p_from_mw[3], .01, side=5, element=3)
-    create_measurement(net, "q", "line", net.res_line.q_from_mvar[3], 0.01, side=5, element=3)
+    create_measurement(net, "p", "line", net.res_line.p_from_mw[3], .01, side="from", element=3)
+    create_measurement(net, "q", "line", net.res_line.q_from_mvar[3], 0.01, side="from", element=3)
     success = estimate(net, init='slack', tolerance=1e-9)
 
     # pretty high error for vm_pu (half percent!)
@@ -554,9 +554,9 @@ def test_check_existing_measurements():
     # assert m3 != m2
     assert len(net.measurement) == 3
 
-    m4 = create_measurement(net, "p", "line", -0.0011, 0.01, side=0, element=0,
+    m4 = create_measurement(net, "p", "line", -0.0011, 0.01, side="from", element=0,
                             check_existing=True)
-    m5 = create_measurement(net, "p", "line", -0.0011, 0.01, side=0, element=0,
+    m5 = create_measurement(net, "p", "line", -0.0011, 0.01, side="from", element=0,
                             check_existing=True)
     assert m4 == m5
 
