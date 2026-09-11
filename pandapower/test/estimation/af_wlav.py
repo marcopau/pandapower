@@ -10,26 +10,27 @@ import time
 
 from datetime import timedelta
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.io as pio
 import matplotlib.pyplot as plt
 
-from dotenv import load_dotenv
-
 # imports from pandapower
 import pandapower.networks as pn
 from pandapower import to_pickle, from_pickle
-from pandapower.converter.powerfactory.pp_import_functions import add_tap_dependant_impedance_for_trafo3W
 from pandapower.run import runpp
 from pandapower.estimation import estimate
 from pandapower.create import (create_measurement, create_empty_network, create_bus, create_ext_grid,
                                create_line_from_parameters, create_load, create_sgen)
 from pandapower.auxiliary import pandapowerNet
-
 from pandapower.test.estimation.test_lav_estimation import _r
-
+# from pandapower.plotting import to_html as pp_to_html
+from pandapower.plotting.plotly import simple_plotly  # , vlevel_plotly
+from pandapower.topology.create_graph import create_nxgraph
+from pandapower.plotting.generic_geodata import create_generic_coordinates
+from pandapower.plotting.plotly.measurement_traces import create_measurement_trace
 
 # begin functions
 def get_non_empty_table_names(net: pandapowerNet) -> list[str]:
@@ -45,19 +46,60 @@ def get_non_empty_table_names(net: pandapowerNet) -> list[str]:
     return table_names
 
 
+def deactivate_sgen_by_type(
+        net: pandapowerNet,
+        sgen_type: str = "Biomass_MV"
+) -> None:
+    r"""
+    Deactivate all static generators of a specified type.
+
+    The selected static generators are excluded from power-flow calculations and state estimation by setting their
+    ``in_service`` status to ``False``. The network is modified in-place.
+
+    Parameters:
+        net: Pandapower network that is modified in-place.
+        sgen_type: Static-generator type to deactivate.
+
+    Raises: KeyError: If the ``type`` column does not exist in ``net.sgen``.
+
+    Returns: None
+    """
+    if "type" not in net.sgen.columns:
+        raise KeyError("The column 'type' does not exist in net.sgen.")
+
+    # Select static generators with the specified type
+    sgen_type_mask = net.sgen["type"].eq(sgen_type)
+
+    # Exclude the selected static generators from calculations
+    net.sgen.loc[sgen_type_mask, "in_service"] = False
+
+
 def _plot_bus_voltage(net: pandapowerNet, close_b: bool = False) -> None:
-    bus_voltage_pu = net.res_bus["vm_pu"]
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(net.bus.index, bus_voltage_pu, marker="o", linestyle="-")
-    ax.axhline(1.0, color="black", linestyle="--", linewidth=1)
-    ax.set_xlabel("Busindex")
-    ax.set_ylabel("Spannung [p.u.]")
-    ax.set_title("Spannungen an den Bussen")
+
+    # Ergebnisse des Lastflusses
+    bus_voltage_pu = net.res_bus["vm_pu"]
+    ax.plot(bus_voltage_pu.index, bus_voltage_pu, marker="o", linestyle="-", label="Lastfluss")
+
+    # Ergebnisse der State Estimation, falls vorhanden
+    if "res_bus_est" in net and not net.res_bus_est.empty:
+        estimated_voltage_pu = net.res_bus_est["vm_pu"].dropna()
+
+        ax.plot(estimated_voltage_pu.index, estimated_voltage_pu, marker="x", linestyle="--", label="State Estimation")
+
+    ax.axhline(1.0, color="black", linestyle="--", linewidth=1, label="Nennspannung")
+
+    ax.set_xlabel("bus index")
+    ax.set_ylabel("voltage [p.u.]")
+    ax.set_title("bus voltages")
     ax.grid(True)
+    ax.legend()
+
     fig.tight_layout()
     plt.show()
-    plt.close(fig)
 
+    if close_b:
+        plt.close(fig)
 
 
 def _check_net_limits(net: pandapowerNet) -> list[dict[str, str]]:
@@ -310,6 +352,19 @@ def _fill_measurement_values_from_powerflow(
         if value is not None:
             net.measurement.at[idx, "value"] = value
             net.measurement.at[idx, "std_dev"] = std_dev
+
+    # ToDo: remove after testing
+    # rng = np.random.default_rng(42)
+    # # copy clean measurement set
+    # meas = net.measurement.copy()
+    #
+    # # choose 5 % as bad data
+    # n_bad = max(1, int(0.05 * len(meas)))
+    # bad_idx = rng.choice(meas.index, size=n_bad, replace=False)
+    #
+    # # create gross errors
+    # meas.loc[bad_idx, "value"] *= 1.5
+    # net.measurement = meas
 
 
 def _create_simbench_mc_case(
@@ -2383,58 +2438,12 @@ def _get_allocation_factor_names(net: pandapowerNet) -> list[str]:
         if table is None or table.empty or "type" not in table.columns:
             continue
 
-        valid_types = (
-            table["type"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-        )
+        valid_types = table["type"].dropna().astype(str).str.strip()
+        cluster_names.update(cluster for cluster in valid_types if cluster and cluster.lower() != "nan")
 
-        cluster_names.update(
-            cluster for cluster in valid_types
-            if cluster and cluster.lower() != "nan"
-        )
-
+    number_af = len(net.load["type"].unique()) + len(net.gen["type"].unique()) + len(net.sgen["type"].unique())
+    print(f"number of allocation factors: {number_af}")
     return sorted(cluster_names)
-
-
-def _build_bus_cluster_matrix(
-    net: pandapowerNet,
-    cluster_names: list[str]
-) -> pd.DataFrame:
-    """
-    Build a bus-by-cluster matrix using nominal apparent powers.
-
-    Loads and generators are both represented by positive installed
-    magnitudes because the matrix describes cluster presence and size,
-    not the power-flow sign convention.
-    """
-    matrix = pd.DataFrame(
-        0.0,
-        index=net.bus.index,
-        columns=cluster_names,
-        dtype=float
-    )
-
-    for table_name in ("load", "sgen"):
-        table = getattr(net, table_name)
-
-        if table.empty or "type" not in table.columns:
-            continue
-
-        for _, element in table.iterrows():
-            cluster = str(element.get("type", "")).strip()
-
-            if cluster not in matrix.columns:
-                continue
-
-            bus = int(element["bus"])
-            p = float(element.get("p_mw", 0.0))
-            q = float(element.get("q_mvar", 0.0))
-
-            matrix.at[bus, cluster] += np.hypot(p, q)
-
-    return matrix
 
 
 def _build_radial_children(
@@ -2497,7 +2506,7 @@ def _build_radial_children(
 if __name__ == "__main__":
     time_start = time.perf_counter()
     load_dotenv()
-
+    ## chose the case
     test_b: bool = False
     test_case_b: bool = False
     case_sb = "lPV"
@@ -2506,8 +2515,43 @@ if __name__ == "__main__":
     ieee30_b: bool = False
     bus18_b: bool = False
     eval_18bus_b: bool = False
+    simbench_ls_b: bool = False
     simbench_b: bool = False
     eval_sb_b: bool = False
+
+    ## set simulation parameters
+    num_diff_cases: int = 100
+    used_seed: int = 112
+    used_seed_pf: int | None = None
+    used_seed_m: int | None = None
+    with_ortools_b: bool = False
+    af_constraints_b: bool = False
+    with_wls_b: bool = True
+    used_rv: float = .01
+    used_ri: float = .01
+    used_rp: float = .01
+    used_rq: float = .01
+    l_range: tuple[float, float] = (.5, .8)
+    s_range: tuple[float, float] = (.3, .5)
+
+    parameters = {
+        "num_diff_cases": num_diff_cases,
+        "used_seed": used_seed,
+        "used_seed_pf": used_seed_pf,
+        "used_seed_m": used_seed_m,
+        "with_ortools_b": with_ortools_b,
+        "af_constraints_b": af_constraints_b,
+        "with_wls_b": with_wls_b,
+        "used_rv": used_rv,
+        "used_ri": used_ri,
+        "used_rp": used_rp,
+        "used_rq": used_rq,
+        "load_range_min": l_range[0],
+        "load_range_max": l_range[1],
+        "sgen_range_min": s_range[0],
+        "sgen_range_max": s_range[1],
+    }
+    para_df = pd.DataFrame([parameters])
 
     if test_b:
         sb_grid_ls = [
@@ -2576,50 +2620,36 @@ if __name__ == "__main__":
             os.path.join(str(os.getenv("PATH_EVAL_18BUS")), neg_dir)
         )
 
-    if simbench_b:
+    if simbench_ls_b:
         sb_grid_ls = ["1-MV-rural--0-sw"]  #"1-MV-semiurb--0-sw", "1-MV-urban--0-sw", "1-MV-comm--0-sw"  "1-MV-rural--0-sw"
         subdir = "001"
         for sb_grid in sb_grid_ls:
             d_path = os.path.join(os.getenv("PATH_DATA_SB", "."), sb_grid, subdir)
             os.makedirs(d_path, exist_ok=True)
 
+            path_para = os.path.join(d_path, "simulation_parameters.csv")
+            para_df.to_csv(path_para, sep=";", decimal=",", index=False)
+            print(f"simulation parameters saved to: {path_para}")
+
             net_sb = sb.get_simbench_net(sb_grid)
-            # net_sb.load["type"] = net_sb.load["type"].fillna("residential")
-
-            p_loads = net_sb.load["p_mw"].abs()
-
-            net_sb.load["type"] = np.select(
-                [
-                    p_loads <= 0.10,
-                    (p_loads > 0.10) & (p_loads <= 0.28),
-                    (p_loads > 0.28) & (p_loads <= 0.37),
-                    p_loads > 0.37,
-                ],
-                [
-                    "load_small",
-                    "load_medium",
-                    "load_large",
-                    "load_very_large",
-                ],
-                default="unknown"
-            )
+            net_sb.load["type"] = net_sb.load["type"].fillna("residential")
 
             create_random_estimations_simbench(
-                net_sb,
-                d_path,
-                100,
-                112,
-                None,
-                None,
-                True,
-                True,
-                False,
-                .01,
-                .01,
-                .01,
-                .01,
-                (.5, .8),
-                (.3, .5)
+                net=net_sb,
+                path=d_path,
+                itr=num_diff_cases,
+                seed=used_seed,
+                seed_pf=used_seed_pf,
+                seed_m=used_seed_m,
+                with_ortools=with_ortools_b,
+                with_af_constraints=af_constraints_b,
+                with_wls=with_wls_b,
+                rv=used_rv,
+                ri=used_ri,
+                rp=used_rp,
+                rq=used_rq,
+                load_range=l_range,
+                sgen_range=s_range
             )
             e_path = os.path.join(os.getenv("PATH_EVAL_SB", "."), sb_grid, subdir)
             evaluation_af(d_path, e_path)
@@ -2628,49 +2658,27 @@ if __name__ == "__main__":
             # net_sb.measurement.drop(net_sb.measurement.index, inplace=True)
             print(f"finished: {sb_grid}")
 
-    if eval_sb_b:
-        pos_dir = "000"
-        neg_dir = "001"
-        sb_grid_name = "1-MV-comm--0-sw"
-        eval_neg_af(
-            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, pos_dir),
-            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, neg_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, pos_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, neg_dir)
-        )
-
-    linprog_b: bool = False
-    if linprog_b:
-        net_prob = from_pickle(
-            "/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/014/af_wlav/af_wlav_065.p"  # '/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/011/af_wlav/prob_af_wlav_048.p'
-        )
-
-        af_w_lav = copy.deepcopy(net_prob)
-        af_lav = copy.deepcopy(net_prob)
-        af_wls = copy.deepcopy(net_prob)
-
-        res_lav = estimate(af_lav, algorithm="af-lp", wlav=False, with_ortools=False)
-        res_wls = estimate(af_wls, algorithm="af-wls")
-        res_w_lav = estimate(
-            af_w_lav,
-            algorithm="af-lp",
-            wlav=True,
-            with_ortools=False,
-            linprog_method="highs-ipm",
-            maximum_iterations=200
-        )
-
-    sim_bool: bool = False
-    with_wls_b: bool = False
-    if sim_bool:
-        subdir = "000"
+    if simbench_b:
+        subdir = "040"
         sb_grid_name = "1-MV-comm--0-sw"  # "1-MV-rural--0-sw" "1-MV-urban--0-sw" ## "1-MV-comm--0-sw" -> voltage looks good for state estimation
         d_path = os.path.join(os.getenv("PATH_DATA_SB", "."), sb_grid_name, subdir)
         os.makedirs(d_path, exist_ok=True)
+        path_para = os.path.join(d_path, "simulation_parameters.csv")
+        para_df.to_csv(path_para, sep=";", decimal=",", index=False)
+        print(f"simulation parameters saved to: {path_para}")
+
         net_sb = sb.get_simbench_net(sb_grid_name)
 
+        # delete biomass -> some problems with allocation factors
+        mask = net_sb.sgen["type"].eq("Biomass_MV")
+        sgen_indices = net_sb.sgen.index[mask]
+        net_sb.sgen.drop(index=sgen_indices, inplace=True)
+        print(f"deleted sgen: {net_sb.sgen.loc[sgen_indices]}")
+
+        # deactivate_sgen_by_type(net_sb, "Biomass_MV")  # wls get problems with in_service = False ToDo: check this
         # net_elements_ls = get_non_empty_table_names(net_sb)
 
+        # create new clusters for allocation factors
         p_loads = net_sb.load["p_mw"].abs()
         if sb_grid_name == "1-MV-rural--0-sw":
             net_sb.load["type"] = np.select(  # "1-MV-rural--0-sw"  -> wls algorithm does not work
@@ -2710,21 +2718,21 @@ if __name__ == "__main__":
             )
 
         create_random_estimations_simbench(
-            net_sb,
-            d_path,
-            100,
-            112,
-            None,
-            None,
-            False,
-            True,
-            with_wls_b,
-            .01,
-            .01,
-            .01,
-            .01,
-            (.5, .8),
-            (.3, .5)
+            net=net_sb,
+            path=d_path,
+            itr=num_diff_cases,
+            seed=used_seed,
+            seed_pf=used_seed_pf,
+            seed_m=used_seed_m,
+            with_ortools=with_ortools_b,
+            with_af_constraints=af_constraints_b,
+            with_wls=with_wls_b,
+            rv=used_rv,
+            ri=used_ri,
+            rp=used_rp,
+            rq=used_rq,
+            load_range=l_range,
+            sgen_range=s_range
         )
 
         e_path = os.path.join(os.getenv("PATH_EVAL_SB", "."), sb_grid_name, subdir)
@@ -2732,37 +2740,102 @@ if __name__ == "__main__":
         evaluation_vp(d_path, e_path, 3.0, with_wls_b)
         evaluation_bus(d_path, e_path, with_wls_b)
 
-        # alloc_fac_ls = _get_allocation_factor_names(net_sb)
-        # af_matrix = _build_bus_cluster_matrix(net_sb, alloc_fac_ls)
-        #
-        #
-        # number_af = (
-        #         len(net_sb.load["type"].unique()) + len(net_sb.gen["type"].unique()) + len(net_sb.sgen["type"].unique())
-        # )
+    if eval_sb_b:
+        pos_dir = "000"
+        neg_dir = "001"
+        sb_grid_name = "1-MV-comm--0-sw"
+        eval_neg_af(
+            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, pos_dir),
+            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, neg_dir),
+            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, pos_dir),
+            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, neg_dir)
+        )
 
-        print(f"ende")
+    linprog_b: bool = False
+    if linprog_b:
+        net_prob = from_pickle(
+            "/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/014/af_wlav/af_wlav_065.p"  # '/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/011/af_wlav/prob_af_wlav_048.p'
+        )
 
-    wls_check_b: bool = False
+        af_w_lav = copy.deepcopy(net_prob)
+        af_lav = copy.deepcopy(net_prob)
+        af_wls = copy.deepcopy(net_prob)
+
+        res_lav = estimate(af_lav, algorithm="af-lp", wlav=False, with_ortools=False)
+        res_wls = estimate(af_wls, algorithm="af-wls")
+        res_w_lav = estimate(
+            af_w_lav,
+            algorithm="af-lp",
+            wlav=True,
+            with_ortools=False,
+            linprog_method="highs-ipm",
+            maximum_iterations=200
+        )
+
+    wls_check_b: bool = True
     if wls_check_b:
-        net_sb = sb.get_simbench_net("1-MV-rural--0-sw")
-        runpp(net_sb)
+        sb_grid_name = "1-MV-comm--0-sw"
+        d_path = os.path.join(os.getenv("PATH_DATA_SB", "."), sb_grid_name)
+        net_sb = sb.get_simbench_net(sb_grid_name)
+        # runpp(net_sb)
 
         p_loads = net_sb.load["p_mw"].abs()
-        net_sb.load["type"] = np.select(  # "1-MV-rural--0-sw"  -> wls algorithm does not work
-            [
-                p_loads <= 0.3,
-                p_loads > 0.3
-            ],
-            [
-                "residential",
-                "commercial"
-            ],
-            default="unknown"
-        )
+        if sb_grid_name == "1-MV-urban--0-sw":
+            net_sb.load["type"] = np.select(  # "1-MV-urban--0-sw"  -> wlav strange results, check these
+                [
+                    p_loads <= 0.35,
+                    p_loads > 0.35
+                ],
+                [
+                    "residential",
+                    "commercial"
+                ],
+                default="unknown"
+            )
+        if sb_grid_name == "1-MV-rural--0-sw":
+            net_sb.load["type"] = np.select(  # "1-MV-rural--0-sw"  -> wls algorithm does not work
+                [
+                    p_loads <= 0.3,
+                    p_loads > 0.3
+                ],
+                [
+                    "residential",
+                    "commercial"
+                ],
+                default="unknown"
+            )
+        if sb_grid_name == "1-MV-comm--0-sw":
+            net_sb.load["type"] = np.select(  # "1-MV-comm--0-sw"
+                [
+                    p_loads <= 0.70,
+                    p_loads > 0.70
+                ],
+                [
+                    "residential",
+                    "commercial"
+                ],
+                default="unknown"
+            )
+
         np.random.seed(112)
-        # k = _create_simbench_mc_case(net_sb, None)
+        k = _create_simbench_mc_case(net_sb, None)
         _fill_measurement_values_from_powerflow(net_sb, None, .01, .01, .01, .01)
-        res_wlav = af_wlav = estimate(
+
+        # new geodata for simbench grid
+        graph = create_nxgraph(net_sb)
+        create_generic_coordinates(net_sb, graph, overwrite=True)
+
+        meas_traces = create_measurement_trace(net_sb)
+        fig_s_plot = simple_plotly(
+            net_sb,
+            filename=os.path.join(d_path, "final.html"),
+            auto_open=False,
+            figsize=2.0,
+            bus_size=8,
+            additional_traces=meas_traces
+        )
+
+        res_wlav = estimate(
                 net_sb,
                 algorithm="af-lp",
                 wlav=True,

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import overload, Literal
 
 import numpy as np
-from jupyterlab.utils import deprecated
+from typing_extensions import deprecated
 from scipy.stats import chi2
 
 from pandapower import pandapowerNet
