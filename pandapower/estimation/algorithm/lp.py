@@ -64,24 +64,48 @@ class LPAlgorithm(BaseAlgorithm):
             **kwargs
     ) -> ExtendedPPCI | bool:
         r"""
-        Perform power system state estimation using the (W)LAV formulation.
+        Perform power system state estimation using the (weighted) least absolute value (LAV/WLAV) formulation.
 
         The method solves an iterative linear programming problem based on the linearized measurement model
 
         .. math::
             r = z - h(x), \quad r_{\text{new}} \approx r - H \,\Delta E,
 
-        :math:`z` is the measurement vector and :math:`h(x)` is the non-linear measurement function (What measurement
-        values would we expect if the network state x holds?). In the script the current state vector :math:`x = E` and
-        :math:`H` is the Jacobian-Matrix. The objective is to minimize the (weighted) 1-norm of the residuals
+        :math:`z` is the measurement vector, :math:`h(x)` is the nonlinear measurement function and :math:`r` is the
+        residual vector. In the script the current state vector :math:`x = E` and
+        :math:`H` is the Jacobian-Matrix.
+
+        For the unweighted LAV estimator, the objective is to minimize the 1-norm of the residual vector:
+
+        .. math::
+            J_{\mathrm{LAV}} = \sum_{i=1}^{m} |r_i|.
+
+        For the weighted LAV (WLAV) estimator, each residual is normalized by the standard deviation :math:`\sigma_i` of
+        the corresponding measurement:
+
+        .. math::
+            J_{\mathrm{WLAV}} = \sum_{i=1}^{m} \left|\frac{r_i}{\sigma_i}\right|
+            = \sum_{i=1}^{m} \frac{1}{\sigma_i}|r_i|.
+
+        Thus, the weights used by the WLAV estimator are
+
+        .. math::
+            w_i = \frac{1}{\sigma_i},
+
+        whereas the unweighted LAV estimator uses :math:`w_i = 1`. With the goal to minimize
 
         .. math::
             \min \sum_i w_i \, \lvert r_i \rvert.
 
-        Let :math:`w_i` be the weight and :math:`r_i` be the residual or measurement error of i-th element. In each
-        iteration, a linear program is solved via :func:`scipy.optimize.linprog` to obtain the state update
-        :math:`\Delta E`. The state vector :math:`E = [\theta_{\mathrm{non-slack}}, V_{\mathrm{all-buses}}]^\top`
-        inside ``eppci`` is updated in-place.
+        In each iteration, the nonlinear measurement model is linearized around the current state and a linear
+        programming problem is solved via `SciPy <https://docs.scipy.org/doc/scipy/>`_ or
+        `OR-Tools solver <https://github.com/google/or-tools>`_ to determine the state update :math:`\Delta E` in
+        ``eppci``. The state vector is subsequently updated according to
+
+        .. math::
+            E \leftarrow E + \Delta E
+
+        with the state vector :math:`E = [\theta_{\mathrm{non-slack}}, V_{\mathrm{all-buses}}]^\top`.
 
         Parameters:
             eppci:

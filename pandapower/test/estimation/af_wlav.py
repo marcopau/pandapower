@@ -32,6 +32,7 @@ from pandapower.topology.create_graph import create_nxgraph
 from pandapower.plotting.generic_geodata import create_generic_coordinates
 from pandapower.plotting.plotly.measurement_traces import create_measurement_trace
 
+
 # begin functions
 def get_non_empty_table_names(net: pandapowerNet) -> list[str]:
     """
@@ -249,12 +250,12 @@ def _add_measurements_af(
 
 
 def _fill_measurement_values_from_powerflow(
-    net: pandapowerNet,
-    seed_m: int | None = None,
-    rv: float = 0.01,
-    ri: float = 0.01,
-    rp: float = 0.03,
-    rq: float = 0.03
+        net: pandapowerNet,
+        seed_m: int | None = None,
+        rv: float = 0.01,
+        ri: float = 0.01,
+        rp: float = 0.03,
+        rq: float = 0.03
 ) -> None:
     """
     Fill existing empty pandapower measurements from simbench net with values from power flow results.
@@ -368,61 +369,113 @@ def _fill_measurement_values_from_powerflow(
 
 
 def _create_simbench_mc_case(
-    net,
-    seed_pf: int | None = None,
-    load_range: tuple[float, float] = (.5, .8),
-    sgen_range: tuple[float, float] = (.3, .5),
+        net,
+        seed_pf: int | None = None,
+        scaling_ranges: dict[str, tuple[float, float]] | None = None
 ) -> dict[str, dict]:
     """
     Generate a random operating point for a SimBench network and perform a power flow calculation.
 
-    A copy of the input network is created and the active and reactive powers of all loads and static generators are
-    scaled by uniformly distributed random factors. The resulting network represents the "true" operating state for the
-    current Monte Carlo iteration.
+    A deep copy of the input network is created. Loads, static generators (``sgen``), and generators (``gen``) are
+    scaled individually according to their cluster specified in the ``type`` column.
 
-    After the power flow calculation, the result tables (``res_*``) of the perturbed network are copied back to the
-    original network. Consequently, the original network retains its nominal load and generation values while containing
-    the power flow results of the randomly perturbed operating point. This enables state estimation with nominal values
-    and measurements derived from varying operating conditions.
+    For each element, an independent scaling factor is sampled from a uniform distribution. The lower and upper bounds
+    of the distribution are obtained from ``scaling_ranges`` using the element's ``type`` as the dictionary key.
+
+    All clusters occurring in the ``load``, ``sgen``, and ``gen`` tables must have a corresponding entry in
+    ``scaling_ranges``. Additional entries in ``scaling_ranges`` that are not used by the network are allowed.
+
+    Active power ``p_mw`` is multiplied by the sampled scaling factor. Reactive power ``q_mvar`` is scaled by the same
+    factor if the respective element table contains a ``q_mvar`` column. Thus, the original power factor of the element
+    is preserved.
+
+    After scaling all elements, a power flow is performed on the copied network. The resulting ``res_*`` tables are then
+    copied back to the original network. Consequently, the original network retains its nominal load and generation
+    values while its result tables represent the randomly generated operating point.
 
     Parameters:
-        net: SimBench network containing the nominal load and generation values.
-        seed_pf: Attention if None, no seed will be used different to normal use case.
-        load_range: Lower and upper bounds of the uniformly distributed scaling factors applied to loads.
-        sgen_range: Lower and upper bounds of the uniformly distributed scaling factors applied to sgens.
+        net:
+            network containing the nominal load and generation values. The element tables ``load``, ``sgen``, and
+            ``gen`` are expected to contain a ``type`` column defining the corresponding cluster.
+        seed_pf: Random seed used for sampling the scaling factors. If ``None``, the current NumPy random state is used.
+        scaling_ranges :
+            Mapping from cluster names to the lower and upper bounds of their uniformly distributed scaling factors,
+            i.e. ``{"cluster": (lower_bound, upper_bound)}``. Every cluster occurring in ``net.load``, ``net.sgen``, or
+            ``net.gen`` must be present in this dictionary. If ``None``, the predefined default scaling ranges are used.
 
     Returns:
-        Scaling parameters for loads and sgens.
+        Dictionary containing the sampled scaling factor for each element, grouped by element type
+        (``load``, ``sgen``, and ``gen``). The element indices are used as keys.
     """
 
     # ToDo: Check what the scaling factor in load, sgen, gen does
     if seed_pf is not None:
         np.random.seed(seed_pf)
 
+    if scaling_ranges is None:
+        scaling_ranges = {
+            "Biomass_MV": (0.8, 1.0),
+            "Hydro_MV": (0.6, 1.0),
+            "PV_MV": (0.2, 1.0),
+            "Wind_MV": (0.3, 1.0),
+            "commercial": (0.5, 0.9),
+            "lv_RES": (0.3, 0.8),
+            "residential": (0.3, 0.9),
+        }
+
+    for cluster, (low, high) in scaling_ranges.items():
+        if low > high:
+            raise ValueError(f"Invalid scaling range for '{cluster}': lower bound {low} > upper bound {high}")
+
     net_pf = copy.deepcopy(net)
 
     k = {
         "load": {},
         "sgen": {},
+        "gen": {}
     }
 
-    # scale loads in net_pf
-    for idx in net_pf.load.index:
-        factor = np.random.uniform(*load_range)
-        k["load"][idx] = factor
+    # check that all used clusters have a scaling range
+    used_clusters = set()
 
-        net_pf.load.at[idx, "p_mw"] *= factor
-        net_pf.load.at[idx, "q_mvar"] *= factor
+    for element in ("load", "sgen", "gen"):
+        table = net_pf[element]
+        if table.empty:
+            continue
+        if "type" not in table.columns:
+            raise ValueError(f"Element table '{element}' has no 'type' column.")
+        if table["type"].isna().any():
+            missing_type_indices = table.index[table["type"].isna()].tolist()
+            raise ValueError(f"Missing cluster/type for {element} indices: {missing_type_indices}")
+        used_clusters.update(table["type"].unique())
 
-    # sclae sgen in net_pf
-    for idx in net_pf.sgen.index:
-        factor = np.random.uniform(*sgen_range)
-        k["sgen"][idx] = factor
+    missing = used_clusters - set(scaling_ranges)
+    if missing:
+        raise ValueError(
+            f"Missing scaling ranges for clusters: {sorted(missing)}"
+        )
 
-        net_pf.sgen.at[idx, "p_mw"] *= factor
-        net_pf.sgen.at[idx, "q_mvar"] *= factor
+    # scale elements depending on their cluster/type
+    for element in ("load", "sgen", "gen"):
+        table = net_pf[element]
 
-    # run powerflow with scaled values
+        if table.empty:
+            continue
+
+        for idx in table.index:
+            cluster = table.at[idx, "type"]
+
+            low, high = scaling_ranges[cluster]
+            factor = np.random.uniform(low, high)
+
+            k[element][idx] = factor
+
+            table.at[idx, "p_mw"] *= factor
+
+            if "q_mvar" in table.columns:
+                table.at[idx, "q_mvar"] *= factor
+
+    # run power flow with scaled operating point
     runpp(net_pf)
 
     # copy results from powerflow to net for state estimation
@@ -571,7 +624,7 @@ def _create_measurement_18_bus_grid(
 
 def _create_18_bus_grid(
         base_mva: float = 10.0,
-        v_b = 11.0,
+        v_b: float = 11.0,
         slack_v: float = 1.0,
         slack_va_degree: float = 0.0,
         load_range: tuple[float, float] = (.5, .8),
@@ -681,7 +734,7 @@ def _create_18_bus_grid(
     # 2) Lines
     # =========================================================================
     start = np.array([1, 2, 3, 4, 5, 6, 6, 8, 9, 10, 11, 11, 13, 4, 15, 16, 16])
-    end   = np.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
+    end = np.array([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
     # Per-unit line resistances
     r_pu = np.array([0.00001, 0.0174, 0.0001, 0.0052, 0.0003, 0.0010, 0.0017, 0.0022, 0.0001, 0.0016, 0.0007, 0.0299,
                      0.0010, 0.0025, 0.0041, 0.0034, 0.0013])  # change zeros to small value for pf-calc
@@ -763,7 +816,7 @@ def _create_18_bus_grid(
     # Create loads and generators at each bus
     # =========================================================================
     for idx in range(17):
-        bus = buses[idx + 1] # buses 2-18
+        bus = buses[idx + 1]  # buses 2-18
         # Random operating-point scaling factors
         #
         # Residential load:
@@ -907,7 +960,7 @@ def _create_18_bus_grid(
 def _calc_different_se(
         net_base: pandapowerNet,
         failures: list,
-        neg_af: list,
+        af_vc: list,
         num_it: str,
         with_ortools: bool = True,
         with_af_constraints: bool = True,
@@ -931,7 +984,7 @@ def _calc_different_se(
     Parameters:
         net_base: Base pandapower grid on which all three state estimation methods are applied.
         failures: List that is extended by a text entry for each estimation that fails to converge.
-        neg_af: List where information about negative af will save.
+        af_vc: List where information about af which violate constraints.
         num_it: Identifier for this run (e.g. iteration counter) used in all output filenames.
         with_ortools: OR-Tools solver for linear solver ("lp" algorithm). False take scipy solver.
         with_af_constraints: Constraints for allocation factors between 0 and 1 for (W)LAV algorithm.
@@ -956,9 +1009,9 @@ def _calc_different_se(
         else:
             try:
                 net_af_wls = copy.deepcopy(net_base)
-                af_wls = estimate(net_af_wls, algorithm="af-wls", maximum_iterations=100)  # , af_target_value=.4, af_std_value=.15
+                af_wls = estimate(net_af_wls, algorithm="af-wls",maximum_iterations=100)
                 # ToDo: add TypeDict for state estimation
-                af_wls["allocation_factors"].index = ["AF-WLS"]  # type: ignore[attr-defined] # set index for saving data
+                af_wls["allocation_factors"].index = ["AF-WLS"]  # type: ignore[attr-defined]
                 if not af_wls["success"]:
                     failures.append(f"AF-WLS, {num_it}, se failed")  # add failures information to a list
                 to_pickle(net_af_wls, af_wls_file)  # save grid to pickle
@@ -988,10 +1041,11 @@ def _calc_different_se(
             if not af_lav["success"]:
                 failures.append(f"AF-LAV, {num_it}, se failed")
             to_pickle(net_af_lav, af_lav_file)
-            if af_lav["allocation_factors"].loc["AF-LAV"].min() < 0:
+            if (af_lav["allocation_factors"].loc["AF-LAV"].min() < 0
+                    or af_lav["allocation_factors"].loc["AF-LAV"].max() > 1.):
                 # af_lav["allocation_factors"]["sum"] = af_lav["allocation_factors"].loc["AF-LAV"].sum()
-                neg_af.append(f"AF-LAV, {num_it}, negative allocation factors")
-                print(f"AF (AF-LAV) should not be negative")
+                af_vc.append(f"AF-LAV, {num_it}, allocation factors violate constraints")
+                print(f"AF (AF-LAV) should be between zero and one.")
 
         except Exception as e:
             failures.append(f"AF-LAV, {num_it}, exception {type(e).__name__}: {e}")
@@ -1021,9 +1075,10 @@ def _calc_different_se(
             if not af_wlav["success"]:
                 failures.append(f"AF-WLAV, {num_it}, se failed")
             to_pickle(net_af_wlav, af_wlav_file)
-            if af_wlav["allocation_factors"].loc["AF-WLAV"].min() < 0:
-                neg_af.append(f"AF-WLAV, {num_it}, negative allocation factors")
-                print(f"AF (AF-WLAV) should not be negative")
+            if (af_wlav["allocation_factors"].loc["AF-WLAV"].min() < 0
+                    or af_wlav["allocation_factors"].loc["AF-WLAV"].max() > 1.):
+                af_vc.append(f"AF-WLAV, {num_it}, allocation factors violate constraints")
+                print(f"AF (AF-WLAV) should be between zero and one.")
         except Exception as e:
             failures.append(f"AF-WLAV, {num_it}, exception {type(e).__name__}: {e}")
             print(f"AF-WLAV iteration {num_it} crashed: {type(e).__name__}: {e}")
@@ -1112,14 +1167,16 @@ def create_random_18_bus_grid_random_estimation(
 
     np.random.seed(seed)
     failures: list = []  # The list contains information about the final status of the state estimation
-    neg_af: list = []
+    violation_constraints: list = []
     for i in tqdm(range(itr)):
         name_str = f"{i:03d}"  # number 1 -> 001, 56 -> 056 etc.
         net18, k = _create_18_bus_grid(
             load_range=load_range, com_range=com_range, pv_range=pv_range, wind_range=wind_range
         )
         _create_measurement_18_bus_grid(net=net18, rv=rv, rp=rp, rq=rq)  #
-        _calc_different_se(net18, failures, neg_af, name_str, with_ortools, with_wls, data_path)
+        _calc_different_se(
+            net18, failures, violation_constraints, name_str, with_ortools, True, with_wls, data_path
+        )
 
     # If failures and negative af are not empty, the list will save as txt file.
     if not failures:
@@ -1130,13 +1187,13 @@ def create_random_18_bus_grid_random_estimation(
                 f.write(failure + "\n")
         print(f"List is not empty: {failures}")
 
-    if not neg_af:
-        print("neg_af is empty, also good")
+    if not violation_constraints:
+        print("violation_constraints is empty, also good")
     else:
-        with open(os.path.join(data_path, "neg_af.txt"), "w", encoding="utf-8") as f:
-            for n_af in neg_af:
-                f.write(n_af + "\n")
-        print(f"List is not empty: {neg_af}")
+        with open(os.path.join(data_path, "violation_constraints.txt"), "w", encoding="utf-8") as f:
+            for n_vc in violation_constraints:
+                f.write(n_vc + "\n")
+        print(f"List is not empty: {violation_constraints}")
 
 
 def create_random_estimations_simbench(
@@ -1153,8 +1210,7 @@ def create_random_estimations_simbench(
         ri: float = .01,
         rp: float = .03,
         rq: float = .03,
-        load_range: tuple[float, float] = (.5, .8),
-        sgen_range: tuple[float, float] = (.3, .5),
+        scaling_ranges: dict[str, tuple[float, float]] | None = None
 ) -> None:
     """
     Every iteration applies random perturbations to the load and generation values used in the power flow calculation
@@ -1179,23 +1235,29 @@ def create_random_estimations_simbench(
         ri: standard deviation to apply a multiplicative perturbation to quantities for current
         rp: standard deviation to apply a multiplicative perturbation to quantities for active power
         rq: standard deviation to apply a multiplicative perturbation to quantities for reactive power
-        load_range:
-            Lower and upper bounds of the uniformly distributed scaling factors applied to loads for
-            :func:`_create_simbench_mc_case`.
-        sgen_range:
-            Lower and upper bounds of the uniformly distributed scaling factors applied to sgens for
-            :func:`_create_simbench_mc_case`.
+        scaling_ranges: scaling factor range for sgen and load
     Returns: None
     """
-
+    if scaling_ranges is None:
+        scaling_ranges = {
+            "Biomass_MV": (0.8, 1.0),
+            "Hydro_MV": (0.6, 1.0),
+            "PV_MV": (0.2, 1.0),
+            "Wind_MV": (0.3, 1.0),
+            "commercial": (0.5, 0.9),
+            "lv_RES": (0.3, 0.8),
+            "residential": (0.3, 0.9),
+        }
     np.random.seed(seed)
     failures: list = []  # The list contains information about the final status of the state estimation
-    neg_af: list = []
+    violation_constraints: list = []
     for i in range(itr):
         name_str = f"{i:03d}"  # number 1 -> 001, 56 -> 056 etc.
-        k = _create_simbench_mc_case(net, seed_pf, load_range, sgen_range)
+        k = _create_simbench_mc_case(net, seed_pf, scaling_ranges)
         _fill_measurement_values_from_powerflow(net, seed_m, rv, ri, rp, rq)
-        _calc_different_se(net, failures, neg_af, name_str, with_ortools, with_af_constraints, with_wls, path)
+        _calc_different_se(
+            net, failures, violation_constraints, name_str, with_ortools, with_af_constraints, with_wls, path
+        )
 
     if not failures:
         print("List is empty, very good")
@@ -1204,13 +1266,13 @@ def create_random_estimations_simbench(
             for failure in failures:
                 f.write(failure + "\n")
         print(f"List is not empty: {failures}")
-    if not neg_af:
-        print("neg_af is empty, also good")
+    if not violation_constraints:
+        print("violation_constraints is empty, also good")
     else:
-        with open(os.path.join(path, "neg_af.txt"), "w", encoding="utf-8") as f:
-            for n_af in neg_af:
-                f.write(n_af + "\n")
-        print(f"List is not empty: {neg_af}")
+        with open(os.path.join(path, "violation_constraints.txt"), "w", encoding="utf-8") as f:
+            for n_vc in violation_constraints:
+                f.write(n_vc + "\n")
+        print(f"List is not empty: {violation_constraints}")
 
 
 def load_failures(data_path: str = ".", eval_path: str = ".") -> set[tuple[str, int]]:
@@ -1245,7 +1307,7 @@ def load_failures(data_path: str = ".", eval_path: str = ".") -> set[tuple[str, 
     return failure_set
 
 
-def evaluation_af(data_path: str = ".", eval_path: str = "." ) -> None:
+def evaluation_af(data_path: str = ".", eval_path: str = ".") -> None:
     """
     Evaluate and visualize the distribution of allocation factors across all simulation runs.
 
@@ -1706,7 +1768,7 @@ def write_bus_voltage_multi_html(
         eval_path: str,
         html_name: str,
         title: str,
-        neg_af_bool: bool = False
+        vc_af_bool: bool = False
 ) -> None:
     save_path = os.path.join(eval_path, "bus")
     os.makedirs(save_path, exist_ok=True)
@@ -1719,8 +1781,8 @@ def write_bus_voltage_multi_html(
         print(f"No records for {save_html}")
         return
 
-    if neg_af_bool and "case" not in df.columns:
-        print(f"Missing column 'case' for neg_af plot: {save_html}")
+    if vc_af_bool and "case" not in df.columns:
+        print(f"Missing column 'case' for vc_af plot: {save_html}")
         return
 
     iterations = sorted(df["iteration"].unique())
@@ -1735,24 +1797,24 @@ def write_bus_voltage_multi_html(
 
         fig = go.Figure()
 
-        if neg_af_bool:
+        if vc_af_bool:
             group = group.copy()
             group["bus_sort"] = group["bus"].astype(int)
             group = group.sort_values(["bus_sort", "case"])
 
-            neg_group = group[group["case"] == "neg"]
-            pos_group = group[group["case"] == "pos"]
+            vc_group = group[group["case"] == "without constraints"]
+            c_group = group[group["case"] == "with constraints"]
 
             colors = {
                 "powerflow": "rgba(120, 120, 120, 0.75)",
-                "neg_estimated": "rgba(31, 119, 180, 0.95)",
-                "pos_estimated": "rgba(255, 127, 14, 0.95)",
+                "without_costraints_estimated": "rgba(31, 119, 180, 0.95)",
+                "with_constraints_estimated": "rgba(255, 127, 14, 0.95)",
             }
 
-            if not neg_group.empty:
+            if not vc_group.empty:
                 fig.add_trace(go.Scatter(
-                    x=neg_group["bus"],
-                    y=neg_group["powerflow"],
+                    x=vc_group["bus"],
+                    y=vc_group["powerflow"],
                     name="Powerflow",
                     mode="lines+markers",
                     line=dict(color=colors["powerflow"], dash="dash"),
@@ -1760,22 +1822,22 @@ def write_bus_voltage_multi_html(
                 ))
 
                 fig.add_trace(go.Scatter(
-                    x=neg_group["bus"],
-                    y=neg_group["estimated"],
+                    x=vc_group["bus"],
+                    y=vc_group["estimated"],
                     name="SE without constraints on af",
                     mode="lines+markers",
-                    line=dict(color=colors["neg_estimated"]),
-                    marker=dict(color=colors["neg_estimated"]),
+                    line=dict(color=colors["without_costraints_estimated"]),
+                    marker=dict(color=colors["without_costraints_estimated"]),
                 ))
 
-            if not pos_group.empty:
+            if not c_group.empty:
                 fig.add_trace(go.Scatter(
-                    x=pos_group["bus"],
-                    y=pos_group["estimated"],
+                    x=c_group["bus"],
+                    y=c_group["estimated"],
                     name="SE with constraints on af",
                     mode="lines+markers",
-                    line=dict(color=colors["pos_estimated"]),
-                    marker=dict(color=colors["pos_estimated"]),
+                    line=dict(color=colors["with_constraints_estimated"]),
+                    marker=dict(color=colors["with_constraints_estimated"]),
                 ))
 
         else:
@@ -1825,7 +1887,7 @@ def write_bus_power_multi_html(
         html_name: str,
         title: str,
         hide_s_bus: bool = False,
-        neg_af_bool: bool = False,
+        vc_af_bool: bool = False,
         slack_buses: list[int] | None = None,
 ) -> None:
     save_path = os.path.join(eval_path, "bus")
@@ -1839,8 +1901,8 @@ def write_bus_power_multi_html(
         print(f"No records for {save_html}")
         return
 
-    if neg_af_bool and "case" not in df.columns:
-        print(f"Missing column 'case' for neg_af plot: {save_html}")
+    if vc_af_bool and "case" not in df.columns:
+        print(f"Missing column 'case' for vc_af plot: {save_html}")
         return
 
     iterations = sorted(df["iteration"].unique())
@@ -1859,44 +1921,44 @@ def write_bus_power_multi_html(
 
         fig = go.Figure()
 
-        if neg_af_bool:
+        if vc_af_bool:
             group = group.copy()
             group["bus_sort"] = group["bus"].astype(int)
             group = group.sort_values(["bus_sort", "case"])
 
-            neg_group = group[group["case"] == "neg"]
-            pos_group = group[group["case"] == "pos"]
+            vc_group = group[group["case"] == "without constraints"]
+            c_group = group[group["case"] == "with constraints"]
 
             colors = {
                 "powerflow": "rgba(120, 120, 120, 0.45)",
-                "neg_estimated": "rgba(31, 119, 180, 0.85)",
-                "pos_estimated": "rgba(255, 127, 14, 0.85)",
+                "without_constraints_estimated": "rgba(31, 119, 180, 0.85)",
+                "with_constraints_estimated": "rgba(255, 127, 14, 0.85)",
             }
 
-            if not neg_group.empty:
+            if not vc_group.empty:
                 fig.add_trace(go.Bar(
-                    x=neg_group["bus"],
-                    y=neg_group["powerflow"],
+                    x=vc_group["bus"],
+                    y=vc_group["powerflow"],
                     name="Powerflow",
                     offsetgroup="powerflow",
                     marker_color=colors["powerflow"],
                 ))
 
                 fig.add_trace(go.Bar(
-                    x=neg_group["bus"],
-                    y=neg_group["estimated"],
+                    x=vc_group["bus"],
+                    y=vc_group["estimated"],
                     name="SE without constraints on af",
-                    offsetgroup="neg_estimated",
-                    marker_color=colors["neg_estimated"],
+                    offsetgroup="without_constraints_estimated",
+                    marker_color=colors["without_constraints_estimated"],
                 ))
 
-            if not pos_group.empty:
+            if not c_group.empty:
                 fig.add_trace(go.Bar(
-                    x=pos_group["bus"],
-                    y=pos_group["estimated"],
+                    x=c_group["bus"],
+                    y=c_group["estimated"],
                     name="SE with constraints on af",
-                    offsetgroup="pos_estimated",
-                    marker_color=colors["pos_estimated"],
+                    offsetgroup="with_constraints_estimated",
+                    marker_color=colors["with_constraints_estimated"],
                 ))
 
         else:
@@ -1942,9 +2004,8 @@ def write_line_current_multi_html(
         eval_path: str,
         html_name: str,
         title: str,
-        neg_af_bool: bool = False
+        vc_af_bool: bool = False
 ) -> None:
-
     save_path = os.path.join(eval_path, "line")
     os.makedirs(save_path, exist_ok=True)
 
@@ -1956,8 +2017,8 @@ def write_line_current_multi_html(
         print(f"No records for {save_html}")
         return
 
-    if neg_af_bool and "case" not in df.columns:
-        print(f"Missing column 'case' for neg_af plot: {save_html}")
+    if vc_af_bool and "case" not in df.columns:
+        print(f"Missing column 'case' for vc_af plot: {save_html}")
         return
 
     iterations = sorted(df["iteration"].unique())
@@ -1972,44 +2033,44 @@ def write_line_current_multi_html(
 
         fig = go.Figure()
 
-        if neg_af_bool:
+        if vc_af_bool:
             group = group.copy()
             group["line_sort"] = group["line"].astype(int)
             group = group.sort_values(["line_sort", "case"])
 
-            neg_group = group[group["case"] == "neg"]
-            pos_group = group[group["case"] == "pos"]
+            vc_group = group[group["case"] == "without constraints"]
+            c_group = group[group["case"] == "with constraints"]
 
             colors = {
                 "powerflow": "rgba(120, 120, 120, 0.45)",
-                "neg_estimated": "rgba(31, 119, 180, 0.85)",
-                "pos_estimated": "rgba(255, 127, 14, 0.85)",
+                "without_costraints_estimated": "rgba(31, 119, 180, 0.85)",
+                "with_constraints_estimated": "rgba(255, 127, 14, 0.85)",
             }
 
-            if not neg_group.empty:
+            if not vc_group.empty:
                 fig.add_trace(go.Bar(
-                    x=neg_group["line"],
-                    y=neg_group["powerflow"],
+                    x=vc_group["line"],
+                    y=vc_group["powerflow"],
                     name="Powerflow",
                     offsetgroup="powerflow",
                     marker_color=colors["powerflow"],
                 ))
 
                 fig.add_trace(go.Bar(
-                    x=neg_group["line"],
-                    y=neg_group["estimated"],
+                    x=vc_group["line"],
+                    y=vc_group["estimated"],
                     name="SE without constraints on af",
-                    offsetgroup="neg_estimated",
-                    marker_color=colors["neg_estimated"],
+                    offsetgroup="without_costraints_estimated",
+                    marker_color=colors["without_costraints_estimated"],
                 ))
 
-            if not pos_group.empty:
+            if not c_group.empty:
                 fig.add_trace(go.Bar(
-                    x=pos_group["line"],
-                    y=pos_group["estimated"],
+                    x=c_group["line"],
+                    y=c_group["estimated"],
                     name="SE with constraints on af",
-                    offsetgroup="pos_estimated",
-                    marker_color=colors["pos_estimated"],
+                    offsetgroup="with_constraints_estimated",
+                    marker_color=colors["with_constraints_estimated"],
                 ))
 
         else:
@@ -2180,59 +2241,59 @@ def show_af_simbench():
         else:
             print(f"Grid: {simbench_grid} to big.")
 
-def load_neg_af_not_in_failures(
-    data_neg_path: str = ".",
-    data_pos_path: str = ".",
-    eval_path: str = "."
+
+def load_vc_af_not_in_failures(
+        data_vc_path: str = ".",
+        data_c_path: str = ".",
+        eval_path: str = "."
 ) -> set[tuple[str, int]]:
     """
-    Load entries from neg_af.txt that are not present in failures.txt.
+    Load entries from violation_constraints.txt that are not present in failures.txt.
 
     Returns:
-        Set of (solver, iteration) tuples that occur in neg_af.txt
-        but not in failures.txt.
+        Set of (solver, iteration) tuples that occur in violation_constraints.txt but not in failures.txt.
     """
 
-    failures_neg = pd.read_csv(
-        os.path.join(data_neg_path, "failures.txt"),
+    failures_vc = pd.read_csv(
+        os.path.join(data_vc_path, "failures.txt"),
         header=None,
         names=["solver", "iteration", "status"],
         skipinitialspace=True,
         dtype={"solver": str, "iteration": str, "status": str}
     )
-    failures_neg["iteration"] = failures_neg["iteration"].astype(int)
+    failures_vc["iteration"] = failures_vc["iteration"].astype(int)
 
-    failures_pos = pd.read_csv(
-        os.path.join(data_pos_path, "failures.txt"),
+    failures_c = pd.read_csv(
+        os.path.join(data_c_path, "failures.txt"),
         header=None,
         names=["solver", "iteration", "status"],
         skipinitialspace=True,
         dtype={"solver": str, "iteration": str, "status": str}
     )
-    failures_pos["iteration"] = failures_pos["iteration"].astype(int)
+    failures_c["iteration"] = failures_c["iteration"].astype(int)
 
-    neg_af = pd.read_csv(
-        os.path.join(data_neg_path, "neg_af.txt"),
+    violation_constraints_af = pd.read_csv(
+        os.path.join(data_vc_path, "violation_constraints.txt"),
         header=None,
         names=["solver", "iteration", "status"],
         skipinitialspace=True,
         dtype={"solver": str, "iteration": str, "status": str}
     )
-    neg_af["iteration"] = neg_af["iteration"].astype(int)
+    violation_constraints_af["iteration"] = violation_constraints_af["iteration"].astype(int)
 
-    failures_neg_set = set(zip(failures_neg["solver"], failures_neg["iteration"]))
-    failures_pos_set = set(zip(failures_pos["solver"], failures_pos["iteration"]))
+    failures_vc_set = set(zip(failures_vc["solver"], failures_vc["iteration"]))
+    failures_c_set = set(zip(failures_c["solver"], failures_c["iteration"]))
 
-    neg_af_set = set(zip(neg_af["solver"], neg_af["iteration"]))
+    vc_af_set = set(zip(violation_constraints_af["solver"], violation_constraints_af["iteration"]))
 
-    result_set = neg_af_set - failures_neg_set - failures_pos_set
+    result_set = vc_af_set - failures_vc_set - failures_c_set
 
     result_df = pd.DataFrame(
         sorted(result_set),
         columns=["solver", "iteration"]
     )
 
-    result_csv = os.path.join(eval_path, "neg_af_not_in_failures.csv")
+    result_csv = os.path.join(eval_path, "vc_af_not_in_failures.csv")
     if os.path.exists(result_csv):
         print(f"file {result_csv} exists, ignoring")
     else:
@@ -2241,60 +2302,61 @@ def load_neg_af_not_in_failures(
     return result_set
 
 
-def eval_neg_af(
-        d_pos_path: str,
-        d_neg_path: str,
-        e_pos_path: str,
-        e_neg_path: str
+def eval_vc_af(
+        d_c_path: str,
+        d_vc_path: str,
+        e_c_path: str,
+        e_vc_path: str
 ) -> None:
-
-    neg_af_set = load_neg_af_not_in_failures(d_neg_path, d_pos_path, e_neg_path)
+    r"""
+    Evaluation of simulations with and without constraints for allocation factors
+    """
+    vc_af_set = load_vc_af_not_in_failures(d_vc_path, d_c_path, e_vc_path)
 
     solver_ls = ["AF-WLAV", "AF-LAV"]
 
+    af_vc_wlav_path = os.path.join(d_vc_path, "af_wlav")
+    af_vc_wlav_files = collect_pickle_files(af_vc_wlav_path, "af_wlav_")
 
-    af_neg_wlav_path = os.path.join(d_neg_path, "af_wlav")
-    af_neg_wlav_files = collect_pickle_files(af_neg_wlav_path, "af_wlav_")
+    af_vc_lav_path = os.path.join(d_vc_path, "af_lav")
+    af_vc_lav_files = collect_pickle_files(af_vc_lav_path, "af_lav_")
 
-    af_neg_lav_path = os.path.join(d_neg_path, "af_lav")
-    af_neg_lav_files = collect_pickle_files(af_neg_lav_path, "af_lav_")
-
-    pkl_files_neg_dc = {
-        "AF-WLAV": af_neg_wlav_files,
-        "AF-LAV": af_neg_lav_files,
+    pkl_files_vc_dc = {
+        "AF-WLAV": af_vc_wlav_files,
+        "AF-LAV": af_vc_lav_files,
     }
 
-    af_pos_wlav_path = os.path.join(d_pos_path, "af_wlav")
-    af_pos_wlav_files = collect_pickle_files(af_pos_wlav_path, "af_wlav_")
-    af_pos_lav_path = os.path.join(d_pos_path, "af_lav")
-    af_pos_lav_files = collect_pickle_files(af_pos_lav_path, "af_lav_")
+    af_c_wlav_path = os.path.join(d_c_path, "af_wlav")
+    af_c_wlav_files = collect_pickle_files(af_c_wlav_path, "af_wlav_")
+    af_c_lav_path = os.path.join(d_c_path, "af_lav")
+    af_c_lav_files = collect_pickle_files(af_c_lav_path, "af_lav_")
 
-    pkl_files_pos_dc = {
-        "AF-WLAV": af_pos_wlav_files,
-        "AF-LAV": af_pos_lav_files,
+    pkl_files_c_dc = {
+        "AF-WLAV": af_c_wlav_files,
+        "AF-LAV": af_c_lav_files,
     }
 
     bus_voltage_records = {
-        "neg": {solver: [] for solver in solver_ls},
-        "pos": {solver: [] for solver in solver_ls},
+        "without constraints": {solver: [] for solver in solver_ls},
+        "with constraints": {solver: [] for solver in solver_ls},
     }
 
     bus_active_power_records = {
-        "neg": {solver: [] for solver in solver_ls},
-        "pos": {solver: [] for solver in solver_ls},
+        "without constraints": {solver: [] for solver in solver_ls},
+        "with constraints": {solver: [] for solver in solver_ls},
     }
 
     line_current_records = {
-        "neg": {solver: [] for solver in solver_ls},
-        "pos": {solver: [] for solver in solver_ls},
+        "without constraints": {solver: [] for solver in solver_ls},
+        "with constraints": {solver: [] for solver in solver_ls},
     }
 
     pkl_files_by_case = {
-        "neg": pkl_files_neg_dc,
-        "pos": pkl_files_pos_dc,
+        "without constraints": pkl_files_vc_dc,
+        "with constraints": pkl_files_c_dc,
     }
 
-    for solver, i in tqdm(sorted(neg_af_set, key=lambda x: (x[0], x[1]))):
+    for solver, i in tqdm(sorted(vc_af_set, key=lambda x: (x[0], x[1]))):
 
         if solver not in solver_ls:
             print(f"unknown solver: solver={solver}, iteration={i:03d}")
@@ -2379,52 +2441,52 @@ def eval_neg_af(
 
     for solver in solver_ls:
         combined_bus_voltage_records[solver] = (
-                bus_voltage_records["neg"][solver]
-                + bus_voltage_records["pos"][solver]
+                bus_voltage_records["without constraints"][solver]
+                + bus_voltage_records["with constraints"][solver]
         )
 
         combined_bus_active_power_records[solver] = (
-                bus_active_power_records["neg"][solver]
-                + bus_active_power_records["pos"][solver]
+                bus_active_power_records["without constraints"][solver]
+                + bus_active_power_records["with constraints"][solver]
         )
 
         combined_line_current_records[solver] = (
-                line_current_records["neg"][solver]
-                + line_current_records["pos"][solver]
+                line_current_records["without constraints"][solver]
+                + line_current_records["with constraints"][solver]
         )
 
-    eval_path = os.path.join(e_neg_path, "pos_neg_combined")
+    eval_path = os.path.join(e_vc_path, "constraints_combined")
     os.makedirs(eval_path, exist_ok=True)
 
     for solver in solver_ls:
         write_bus_voltage_multi_html(
             combined_bus_voltage_records[solver],
             eval_path,
-            f"bus_voltages_pos_neg_{solver}.html",
-            f"Busspannungen je Iteration - pos/neg - {solver}",
-            neg_af_bool=True
+            f"bus_voltages_constraints_{solver}.html",
+            f"Busspannungen je Iteration - with/without constraints - {solver}",
+            vc_af_bool=True
         )
 
         write_bus_power_multi_html(
             combined_bus_active_power_records[solver],
             eval_path,
-            f"bus_power_without_slack_pos_neg_{solver}.html",
-            f"Busleistung je Iteration - pos/neg - {solver}",
+            f"bus_power_without_slack_constraints_{solver}.html",
+            f"Busleistung je Iteration - with/without constraints - {solver}",
             hide_s_bus=True,
-            neg_af_bool=True,
+            vc_af_bool=True,
             slack_buses=slack_buses
         )
 
         write_line_current_multi_html(
             combined_line_current_records[solver],
             eval_path,
-            f"line_current_pos_neg_{solver}.html",
-            f"Leitungsstrom je Iteration - pos/neg - {solver}",
-            neg_af_bool=True
+            f"line_current_constraints_{solver}.html",
+            f"Leitungsstrom je Iteration - with/without constraints - {solver}",
+            vc_af_bool=True
         )
 
 
-def _get_allocation_factor_names(net: pandapowerNet) -> list[str]:
+def _get_allocation_factor_names(net: pandapowerNet) -> tuple[list[str], int]:
     """
     Determine allocation-factor clusters from the element type columns.
 
@@ -2443,64 +2505,7 @@ def _get_allocation_factor_names(net: pandapowerNet) -> list[str]:
 
     number_af = len(net.load["type"].unique()) + len(net.gen["type"].unique()) + len(net.sgen["type"].unique())
     print(f"number of allocation factors: {number_af}")
-    return sorted(cluster_names)
-
-
-def _build_radial_children(
-    net: pandapowerNet,
-    root_bus: int
-) -> tuple[dict[int, list[tuple[int, int]]], dict[int, int]]:
-    """
-    Orient the network as a tree starting from root_bus.
-
-    Returns
-    -------
-    children:
-        Mapping parent bus -> list of (child bus, line index).
-    parent:
-        Mapping child bus -> parent bus.
-    """
-    adjacency: dict[int, list[tuple[int, int]]] = {
-        int(bus): [] for bus in net.bus.index
-    }
-
-    for line_idx, line in net.line.iterrows():
-        if "in_service" in line and not bool(line["in_service"]):
-            continue
-
-        from_bus = int(line["from_bus"])
-        to_bus = int(line["to_bus"])
-
-        adjacency[from_bus].append((to_bus, int(line_idx)))
-        adjacency[to_bus].append((from_bus, int(line_idx)))
-
-    children: dict[int, list[tuple[int, int]]] = {
-        int(bus): [] for bus in net.bus.index
-    }
-    parent: dict[int, int] = {}
-    visited = {root_bus}
-    queue = [root_bus]
-
-    while queue:
-        current = queue.pop(0)
-
-        for neighbor, line_idx in adjacency[current]:
-            if neighbor in visited:
-                continue
-
-            visited.add(neighbor)
-            parent[neighbor] = current
-            children[current].append((neighbor, line_idx))
-            queue.append(neighbor)
-
-    if len(visited) != len(net.bus):
-        missing = sorted(set(net.bus.index.astype(int)) - visited)
-        raise ValueError(
-            "The network is disconnected or contains buses that cannot be "
-            f"reached from root bus {root_bus}: {missing}"
-        )
-
-    return children, parent
+    return sorted(cluster_names), number_af
 
 
 if __name__ == "__main__":
@@ -2525,14 +2530,21 @@ if __name__ == "__main__":
     used_seed_pf: int | None = None
     used_seed_m: int | None = None
     with_ortools_b: bool = False
-    af_constraints_b: bool = False
+    af_constraints_b: bool = True
     with_wls_b: bool = True
     used_rv: float = .01
     used_ri: float = .01
     used_rp: float = .01
     used_rq: float = .01
-    l_range: tuple[float, float] = (.5, .8)
-    s_range: tuple[float, float] = (.3, .5)
+    scaling_ranges_dc: dict[str, tuple[float, float]] = {
+        "Biomass_MV": (0.8, 1.0),
+        "Hydro_MV": (0.6, 1.0),
+        "PV_MV": (0.2, 1.0),
+        "Wind_MV": (0.3, 1.0),
+        "commercial": (0.5, 0.9),
+        "lv_RES": (0.3, 0.8),
+        "residential": (0.3, 0.9),
+    }
 
     parameters = {
         "num_diff_cases": num_diff_cases,
@@ -2546,11 +2558,11 @@ if __name__ == "__main__":
         "used_ri": used_ri,
         "used_rp": used_rp,
         "used_rq": used_rq,
-        "load_range_min": l_range[0],
-        "load_range_max": l_range[1],
-        "sgen_range_min": s_range[0],
-        "sgen_range_max": s_range[1],
     }
+    parameters.update(
+        {f"{cluster}_{bound}": value for cluster, values in scaling_ranges_dc.items()
+         for bound, value in zip(("min", "max"), values)}
+    )
     para_df = pd.DataFrame([parameters])
 
     if test_b:
@@ -2575,7 +2587,7 @@ if __name__ == "__main__":
         # rv=.01, rp=.03, rq=.03
         net_mv = pn.mv_oberrhein()
         runpp(net_mv)
-        _add_measurements_af(net_mv, 112,15, .0, .0, .0)
+        _add_measurements_af(net_mv, 112, 15, .0, .0, .0)
 
     if ieee14_b:
         net14 = pn.case14()
@@ -2610,18 +2622,19 @@ if __name__ == "__main__":
         evaluation_bus(d_path, e_path, True)
 
     if eval_18bus_b:
-        pos_dir = "002"
-        neg_dir = "003"
+        constraints_dir = "002"
+        vc_dir = "003"
 
-        eval_neg_af(
-            os.path.join(str(os.getenv("PATH_DATA_18BUS")), pos_dir),
-            os.path.join(str(os.getenv("PATH_DATA_18BUS")), neg_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_18BUS")), pos_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_18BUS")), neg_dir)
+        eval_vc_af(
+            os.path.join(str(os.getenv("PATH_DATA_18BUS")), constraints_dir),
+            os.path.join(str(os.getenv("PATH_DATA_18BUS")), vc_dir),
+            os.path.join(str(os.getenv("PATH_EVAL_18BUS")), constraints_dir),
+            os.path.join(str(os.getenv("PATH_EVAL_18BUS")), vc_dir)
         )
 
     if simbench_ls_b:
-        sb_grid_ls = ["1-MV-rural--0-sw"]  #"1-MV-semiurb--0-sw", "1-MV-urban--0-sw", "1-MV-comm--0-sw"  "1-MV-rural--0-sw"
+        # "1-MV-semiurb--0-sw", "1-MV-urban--0-sw", "1-MV-comm--0-sw"  "1-MV-rural--0-sw"
+        sb_grid_ls = ["1-MV-rural--0-sw"]
         subdir = "001"
         for sb_grid in sb_grid_ls:
             d_path = os.path.join(os.getenv("PATH_DATA_SB", "."), sb_grid, subdir)
@@ -2632,7 +2645,7 @@ if __name__ == "__main__":
             print(f"simulation parameters saved to: {path_para}")
 
             net_sb = sb.get_simbench_net(sb_grid)
-            net_sb.load["type"] = net_sb.load["type"].fillna("residential")
+            net_sb.load["type"] = net_sb.load["type"].fillna("residential")  # only one cluster for load
 
             create_random_estimations_simbench(
                 net=net_sb,
@@ -2648,8 +2661,7 @@ if __name__ == "__main__":
                 ri=used_ri,
                 rp=used_rp,
                 rq=used_rq,
-                load_range=l_range,
-                sgen_range=s_range
+                scaling_ranges=scaling_ranges_dc
             )
             e_path = os.path.join(os.getenv("PATH_EVAL_SB", "."), sb_grid, subdir)
             evaluation_af(d_path, e_path)
@@ -2659,24 +2671,41 @@ if __name__ == "__main__":
             print(f"finished: {sb_grid}")
 
     if simbench_b:
-        subdir = "040"
+        subdir = "000"
         sb_grid_name = "1-MV-comm--0-sw"  # "1-MV-rural--0-sw" "1-MV-urban--0-sw" ## "1-MV-comm--0-sw" -> voltage looks good for state estimation
         d_path = os.path.join(os.getenv("PATH_DATA_SB", "."), sb_grid_name, subdir)
         os.makedirs(d_path, exist_ok=True)
         path_para = os.path.join(d_path, "simulation_parameters.csv")
         para_df.to_csv(path_para, sep=";", decimal=",", index=False)
         print(f"simulation parameters saved to: {path_para}")
+        path_scale = os.path.join(d_path, "simulation_parameters.csv")
 
         net_sb = sb.get_simbench_net(sb_grid_name)
 
         # delete biomass -> some problems with allocation factors
         mask = net_sb.sgen["type"].eq("Biomass_MV")
         sgen_indices = net_sb.sgen.index[mask]
-        net_sb.sgen.drop(index=sgen_indices, inplace=True)
         print(f"deleted sgen: {net_sb.sgen.loc[sgen_indices]}")
+        net_sb.sgen.drop(index=sgen_indices, inplace=True)
 
         # deactivate_sgen_by_type(net_sb, "Biomass_MV")  # wls get problems with in_service = False ToDo: check this
         # net_elements_ls = get_non_empty_table_names(net_sb)
+
+        # delete i measurements and p/q measurements by buses
+        net_sb.measurement.drop(
+            index=net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("i")], inplace=True
+        )
+        net_sb.measurement.drop(
+            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("p") &
+                                            net_sb.measurement["element_type"].eq("bus")]),
+            inplace=True
+        )
+        net_sb.measurement.drop(
+            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("q") &
+                                            net_sb.measurement["element_type"].eq("bus")]),
+            inplace=True
+        )
+        net_sb.measurement.reset_index(drop=True, inplace=True)
 
         # create new clusters for allocation factors
         p_loads = net_sb.load["p_mw"].abs()
@@ -2717,6 +2746,12 @@ if __name__ == "__main__":
                 default="unknown"
             )
 
+        cluster_ls, cluster_nb = _get_allocation_factor_names(net_sb)
+
+        missing_scaling = [af for af in cluster_ls if af not in scaling_ranges_dc]
+        if missing_scaling:
+            raise ValueError(f"Missing scaling ranges for: {missing_scaling}")
+
         create_random_estimations_simbench(
             net=net_sb,
             path=d_path,
@@ -2731,8 +2766,7 @@ if __name__ == "__main__":
             ri=used_ri,
             rp=used_rp,
             rq=used_rq,
-            load_range=l_range,
-            sgen_range=s_range
+            scaling_ranges=scaling_ranges_dc
         )
 
         e_path = os.path.join(os.getenv("PATH_EVAL_SB", "."), sb_grid_name, subdir)
@@ -2741,20 +2775,21 @@ if __name__ == "__main__":
         evaluation_bus(d_path, e_path, with_wls_b)
 
     if eval_sb_b:
-        pos_dir = "000"
-        neg_dir = "001"
+        constraints_dir = "000"
+        vc_dir = "001"
         sb_grid_name = "1-MV-comm--0-sw"
-        eval_neg_af(
-            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, pos_dir),
-            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, neg_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, pos_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, neg_dir)
+        eval_vc_af(
+            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, constraints_dir),
+            os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, vc_dir),
+            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, constraints_dir),
+            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, vc_dir)
         )
 
     linprog_b: bool = False
     if linprog_b:
         net_prob = from_pickle(
-            "/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/014/af_wlav/af_wlav_065.p"  # '/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/011/af_wlav/prob_af_wlav_048.p'
+            "/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/014/af_wlav/af_wlav_065.p"
+            # '/mnt/data/pandapower/state-estimation/simbench_grid/1-MV-comm--0-sw/011/af_wlav/prob_af_wlav_048.p'
         )
 
         af_w_lav = copy.deepcopy(net_prob)
@@ -2772,9 +2807,9 @@ if __name__ == "__main__":
             maximum_iterations=200
         )
 
-    wls_check_b: bool = True
+    wls_check_b: bool = False
     if wls_check_b:
-        sb_grid_name = "1-MV-comm--0-sw"
+        sb_grid_name = "1-MV-comm--0-sw"  ## "1-MV-rural--0-sw" "1-MV-urban--0-sw"
         d_path = os.path.join(os.getenv("PATH_DATA_SB", "."), sb_grid_name)
         net_sb = sb.get_simbench_net(sb_grid_name)
         # runpp(net_sb)
@@ -2817,8 +2852,29 @@ if __name__ == "__main__":
                 default="unknown"
             )
 
+        cluster_ls, cluster_nb = _get_allocation_factor_names(net_sb)
+        missing_scaling = [af for af in cluster_ls if af not in scaling_ranges_dc]
+        if missing_scaling:
+            raise ValueError(f"Missing scaling ranges for: {missing_scaling}")
+
+        # delete i measurements and p/q measurements by buses ToDo: create function to drop measurements
+        net_sb.measurement.drop(
+            index=net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("i")], inplace=True
+        )
+        net_sb.measurement.drop(
+            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("p") &
+                                            net_sb.measurement["element_type"].eq("bus")]),
+            inplace=True
+        )
+        net_sb.measurement.drop(
+            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("q") &
+                                            net_sb.measurement["element_type"].eq("bus")]),
+            inplace=True
+        )
+        net_sb.measurement.reset_index(drop=True, inplace=True)
+
         np.random.seed(112)
-        k = _create_simbench_mc_case(net_sb, None)
+        k = _create_simbench_mc_case(net_sb, None, scaling_ranges=scaling_ranges_dc)
         _fill_measurement_values_from_powerflow(net_sb, None, .01, .01, .01, .01)
 
         # new geodata for simbench grid
@@ -2828,7 +2884,7 @@ if __name__ == "__main__":
         meas_traces = create_measurement_trace(net_sb)
         fig_s_plot = simple_plotly(
             net_sb,
-            filename=os.path.join(d_path, "final.html"),
+            filename=os.path.join(d_path, f"{sb_grid_name}.html"),
             auto_open=False,
             figsize=2.0,
             bus_size=8,
@@ -2836,26 +2892,25 @@ if __name__ == "__main__":
         )
 
         res_wlav = estimate(
-                net_sb,
-                algorithm="af-lp",
-                wlav=True,
-                with_ortools=False,
-                with_af_constraints=True,
-                linprog_method="highs-ipm",
-                maximum_iterations=100
-            )
+            net_sb,
+            algorithm="af-lp",
+            wlav=True,
+            with_ortools=False,
+            with_af_constraints=True,
+            linprog_method="highs-ipm",
+            maximum_iterations=100
+        )
         res_wls = estimate(net_sb, algorithm="af-wls", maximum_iterations=200)
         res_lav = af_lav = estimate(
-                net_sb,
-                algorithm="af-lp",
-                wlav=False,
-                with_ortools=False,
-                with_af_constraints=True,
-                linprog_method="highs-ipm",
-                maximum_iterations=100
-            )
+            net_sb,
+            algorithm="af-lp",
+            wlav=False,
+            with_ortools=False,
+            with_af_constraints=True,
+            linprog_method="highs-ipm",
+            maximum_iterations=100
+        )
         print(f"wls check ende")
-
 
     runtime = time.perf_counter() - time_start
     print(f"calculated in: {timedelta(seconds=runtime)}")

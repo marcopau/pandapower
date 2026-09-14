@@ -29,16 +29,14 @@ ALGORITHM_MAPPING = {"wls": WLSAlgorithm,
                      "af-wls": WLSAlgorithm,
                      "af-lp": LPAlgorithm}
 ALGORITHM_SE = Literal["wls", "wls_with_zero_constraint", "opt", "irwls", "lp", "af-wls", "af-lp"]
-OPT_VAR_DEFAULTS = {
-    "estimator": "wls",
-    "linprog_method": "highs",
-    "wlav": False,
-    "with_ortools": True,
-    "with_af_constraints": True,
-    "af_init_value": .5,
-    "af_target_value": None,
-    "af_std_value": None
-}
+OPT_VAR_DEFAULTS = {"estimator": "wls",
+                    "linprog_method": "highs",
+                    "wlav": False,
+                    "with_ortools": True,
+                    "with_af_constraints": True,
+                    "af_init_value": .5,
+                    "af_target_value": None,
+                    "af_std_value": None}
 
 
 def estimate(
