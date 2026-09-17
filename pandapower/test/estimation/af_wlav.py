@@ -1770,6 +1770,19 @@ def write_bus_voltage_multi_html(
         title: str,
         vc_af_bool: bool = False
 ) -> None:
+    """
+    Create an HTML file comparing bus-voltage results by iteration.
+
+    Parameters:
+        records: Bus-voltage records containing power-flow and estimated values.
+        eval_path: Base directory for the generated HTML file.
+        html_name: Name of the HTML file.
+        title: Main title displayed in the HTML document.
+        vc_af_bool: Whether to compare constrained and unconstrained results.
+
+    Returns: None
+    """
+    # Create the output directory for bus-voltage evaluations.
     save_path = os.path.join(eval_path, "bus")
     os.makedirs(save_path, exist_ok=True)
 
@@ -1780,37 +1793,38 @@ def write_bus_voltage_multi_html(
     if df.empty:
         print(f"No records for {save_html}")
         return
-
+    # Constraint comparisons require a column identifying each case.
     if vc_af_bool and "case" not in df.columns:
         print(f"Missing column 'case' for vc_af plot: {save_html}")
         return
 
+    # Sort the iterations to produce a deterministic plot order.
     iterations = sorted(df["iteration"].unique())
 
-    html_parts = [
-        "<html><head><meta charset='utf-8'></head><body>",
-        f"<h1>{title}</h1>",
-    ]
+    html_parts = ["<html><head><meta charset='utf-8'></head><body>", f"<h1>{title}</h1>"]
 
-    for k, iteration in enumerate(iterations):
+    # Create one voltage plot for each simulation iteration.
+    for m, iteration in enumerate(iterations):
+
         group = df[df["iteration"] == iteration]
-
         fig = go.Figure()
 
         if vc_af_bool:
             group = group.copy()
+            # Sort bus identifiers numerically instead of alphabetically.
             group["bus_sort"] = group["bus"].astype(int)
             group = group.sort_values(["bus_sort", "case"])
 
-            vc_group = group[group["case"] == "without constraints"]
-            c_group = group[group["case"] == "with constraints"]
+            # Separate results with and without violated allocation-factor constraints.
+            vc_group = group[group["case"] == "unconstrained"]
+            c_group = group[group["case"] == "constrained"]
 
             colors = {
                 "powerflow": "rgba(120, 120, 120, 0.75)",
-                "without_costraints_estimated": "rgba(31, 119, 180, 0.95)",
-                "with_constraints_estimated": "rgba(255, 127, 14, 0.95)",
+                "unconstrained_af_estimation": "rgba(31, 119, 180, 0.95)",
+                "constrained_af_estimation": "rgba(255, 127, 14, 0.95)",
             }
-
+            # Add the power-flow reference and unconstrained estimation.
             if not vc_group.empty:
                 fig.add_trace(go.Scatter(
                     x=vc_group["bus"],
@@ -1824,37 +1838,28 @@ def write_bus_voltage_multi_html(
                 fig.add_trace(go.Scatter(
                     x=vc_group["bus"],
                     y=vc_group["estimated"],
-                    name="SE without constraints on af",
+                    name="SE unconstrained af",
                     mode="lines+markers",
-                    line=dict(color=colors["without_costraints_estimated"]),
-                    marker=dict(color=colors["without_costraints_estimated"]),
+                    line=dict(color=colors["unconstrained_af_estimation"]),
+                    marker=dict(color=colors["unconstrained_af_estimation"]),
                 ))
-
+            # Add the estimation obtained with allocation-factor constraints.
             if not c_group.empty:
                 fig.add_trace(go.Scatter(
                     x=c_group["bus"],
                     y=c_group["estimated"],
-                    name="SE with constraints on af",
+                    name="SE constrained af",
                     mode="lines+markers",
-                    line=dict(color=colors["with_constraints_estimated"]),
-                    marker=dict(color=colors["with_constraints_estimated"]),
+                    line=dict(color=colors["constrained_af_estimation"]),
+                    marker=dict(color=colors["constrained_af_estimation"]),
                 ))
 
         else:
-            fig.add_trace(go.Scatter(
-                x=group["bus"],
-                y=group["powerflow"],
-                name="Powerflow",
-                mode="lines+markers",
-            ))
+            # Compare power-flow and state-estimation results directly.
+            fig.add_trace(go.Scatter(x=group["bus"], y=group["powerflow"], name="Powerflow", mode="lines+markers"))
+            fig.add_trace(go.Scatter(x=group["bus"], y=group["estimated"], name="Estimated", mode="lines+markers"))
 
-            fig.add_trace(go.Scatter(
-                x=group["bus"],
-                y=group["estimated"],
-                name="Estimated",
-                mode="lines+markers",
-            ))
-
+        # Configure the appearance of the current iteration's chart.
         fig.update_layout(
             title=f"Iteration {iteration}",
             xaxis_title="Bus",
@@ -1863,14 +1868,16 @@ def write_bus_voltage_multi_html(
             legend_title="Daten",
         )
 
+        # Optionally use a fixed voltage range:
         # fig.update_yaxes(range=[0.9, 1.05])
 
+        # Complete and save the HTML document.
         html_parts.append(f"<h2>Iteration {iteration}</h2>")
         html_parts.append(
             pio.to_html(
                 fig,
                 full_html=False,
-                include_plotlyjs="cdn" if k == 0 else False
+                include_plotlyjs="cdn" if m == 0 else False  # include_plotlyjs=True (without internet possible)
             )
         )
 
@@ -1890,6 +1897,21 @@ def write_bus_power_multi_html(
         vc_af_bool: bool = False,
         slack_buses: list[int] | None = None,
 ) -> None:
+    """
+    Create an HTML file comparing bus active-power results by iteration.
+
+    Parameters:
+       records: Bus-power records containing power-flow and estimated values.
+       eval_path: Base directory for the generated HTML file.
+       html_name: Name of the HTML file.
+       title: Main title displayed in the HTML document.
+       hide_s_bus: Whether to exclude slack buses from the plots.
+       vc_af_bool: Whether to compare constrained and unconstrained results.
+       slack_buses: Bus indices that are treated as slack buses.
+
+    Returns: None
+    """
+    # Create the output directory for bus-power evaluations.
     save_path = os.path.join(eval_path, "bus")
     os.makedirs(save_path, exist_ok=True)
 
@@ -1900,21 +1922,19 @@ def write_bus_power_multi_html(
     if df.empty:
         print(f"No records for {save_html}")
         return
-
+    # Constraint comparisons require a column identifying each case.
     if vc_af_bool and "case" not in df.columns:
         print(f"Missing column 'case' for vc_af plot: {save_html}")
         return
-
+    # Sort the iterations to produce a deterministic plot order.
     iterations = sorted(df["iteration"].unique())
+    # Initialize the HTML document.
+    html_parts = ["<html><head><meta charset='utf-8'></head><body>", f"<h1>{title}</h1>"]
 
-    html_parts = [
-        "<html><head><meta charset='utf-8'></head><body>",
-        f"<h1>{title}</h1>",
-    ]
-
-    for k, iteration in enumerate(iterations):
+    # Create one grouped bar chart for each simulation iteration.
+    for m, iteration in enumerate(iterations):
         group = df[df["iteration"] == iteration]
-
+        # Exclude slack buses if requested.
         if hide_s_bus and slack_buses is not None:
             slack_buses_str = {str(bus) for bus in slack_buses}
             group = group[~group["bus"].isin(slack_buses_str)]
@@ -1923,18 +1943,19 @@ def write_bus_power_multi_html(
 
         if vc_af_bool:
             group = group.copy()
+            # Sort bus identifiers numerically instead of alphabetically.
             group["bus_sort"] = group["bus"].astype(int)
             group = group.sort_values(["bus_sort", "case"])
-
-            vc_group = group[group["case"] == "without constraints"]
-            c_group = group[group["case"] == "with constraints"]
+            # Separate results with and without violated allocation-factor constraints.
+            vc_group = group[group["case"] == "unconstrained"]
+            c_group = group[group["case"] == "constrained"]
 
             colors = {
                 "powerflow": "rgba(120, 120, 120, 0.45)",
-                "without_constraints_estimated": "rgba(31, 119, 180, 0.85)",
-                "with_constraints_estimated": "rgba(255, 127, 14, 0.85)",
+                "unconstrained_af_estimation": "rgba(31, 119, 180, 0.85)",
+                "constrained_af_estimation": "rgba(255, 127, 14, 0.85)",
             }
-
+            # Add the power-flow reference and unconstrained estimation.
             if not vc_group.empty:
                 fig.add_trace(go.Bar(
                     x=vc_group["bus"],
@@ -1947,33 +1968,26 @@ def write_bus_power_multi_html(
                 fig.add_trace(go.Bar(
                     x=vc_group["bus"],
                     y=vc_group["estimated"],
-                    name="SE without constraints on af",
-                    offsetgroup="without_constraints_estimated",
-                    marker_color=colors["without_constraints_estimated"],
+                    name="SE unconstrained af",
+                    offsetgroup="unconstrained_af_estimation",
+                    marker_color=colors["unconstrained_af_estimation"],
                 ))
-
+            # Add the estimation obtained with allocation-factor constraints.
             if not c_group.empty:
                 fig.add_trace(go.Bar(
                     x=c_group["bus"],
                     y=c_group["estimated"],
-                    name="SE with constraints on af",
-                    offsetgroup="with_constraints_estimated",
-                    marker_color=colors["with_constraints_estimated"],
+                    name="SE constrained af",
+                    offsetgroup="constrained_af_estimation",
+                    marker_color=colors["constrained_af_estimation"],
                 ))
 
         else:
-            fig.add_trace(go.Bar(
-                x=group["bus"],
-                y=group["powerflow"],
-                name="Powerflow",
-            ))
+            # Compare power-flow and state-estimation results directly.
+            fig.add_trace(go.Bar(x=group["bus"], y=group["powerflow"], name="Powerflow"))
+            fig.add_trace(go.Bar(x=group["bus"], y=group["estimated"], name="Estimated"))
 
-            fig.add_trace(go.Bar(
-                x=group["bus"],
-                y=group["estimated"],
-                name="Estimated",
-            ))
-
+        # Configure the appearance of the current iteration's chart.
         fig.update_layout(
             title=f"Iteration {iteration}",
             xaxis_title="Bus",
@@ -1982,16 +1996,17 @@ def write_bus_power_multi_html(
             height=450,
             legend_title="Daten",
         )
-
+        # Load Plotly from the CDN only for the first chart.
         html_parts.append(f"<h2>Iteration {iteration}</h2>")
         html_parts.append(
             pio.to_html(
                 fig,
                 full_html=False,
-                include_plotlyjs="cdn" if k == 0 else False
+                include_plotlyjs="cdn" if m == 0 else False  # include_plotlyjs=True (without internet possible)
             )
         )
 
+    # Complete and save the HTML document.
     html_parts.append("</body></html>")
 
     with open(save_html, "w", encoding="utf-8") as f:
@@ -2006,6 +2021,19 @@ def write_line_current_multi_html(
         title: str,
         vc_af_bool: bool = False
 ) -> None:
+    """
+    Create an HTML file comparing line-current results by iteration.
+
+    Parameters:
+        records: Line-current records containing power-flow and estimated values.
+        eval_path: Base directory for the generated HTML file.
+        html_name: Name of the HTML file.
+        title: Main title displayed in the HTML document.
+        vc_af_bool: Whether to compare constrained and unconstrained results.
+
+    Returns: None
+    """
+    # Create the output directory for line-current evaluations.
     save_path = os.path.join(eval_path, "line")
     os.makedirs(save_path, exist_ok=True)
 
@@ -2016,37 +2044,37 @@ def write_line_current_multi_html(
     if df.empty:
         print(f"No records for {save_html}")
         return
-
+    # Constraint comparisons require a column identifying each case.
     if vc_af_bool and "case" not in df.columns:
         print(f"Missing column 'case' for vc_af plot: {save_html}")
         return
-
+    # Sort the iterations to produce a deterministic plot order.
     iterations = sorted(df["iteration"].unique())
+    # Initialize the HTML document.
+    html_parts = ["<html><head><meta charset='utf-8'></head><body>", f"<h1>{title}</h1>"]
 
-    html_parts = [
-        "<html><head><meta charset='utf-8'></head><body>",
-        f"<h1>{title}</h1>",
-    ]
+    # Create one grouped bar chart for each simulation iteration.
+    for m, iteration in enumerate(iterations):
 
-    for k, iteration in enumerate(iterations):
         group = df[df["iteration"] == iteration]
-
         fig = go.Figure()
 
         if vc_af_bool:
             group = group.copy()
+            # Sort line identifiers numerically instead of alphabetically.
             group["line_sort"] = group["line"].astype(int)
             group = group.sort_values(["line_sort", "case"])
-
-            vc_group = group[group["case"] == "without constraints"]
-            c_group = group[group["case"] == "with constraints"]
+            # Separate results with and without violated allocation-factor constraints.
+            vc_group = group[group["case"] == "unconstrained"]
+            c_group = group[group["case"] == "constrained"]
 
             colors = {
                 "powerflow": "rgba(120, 120, 120, 0.45)",
-                "without_costraints_estimated": "rgba(31, 119, 180, 0.85)",
-                "with_constraints_estimated": "rgba(255, 127, 14, 0.85)",
+                "unconstrained_af_estimation": "rgba(31, 119, 180, 0.85)",
+                "constrained_af_estimation": "rgba(255, 127, 14, 0.85)",
             }
-
+            # Use the power-flow result from the unconstrained case as the reference and add its state-estimation
+            # result.
             if not vc_group.empty:
                 fig.add_trace(go.Bar(
                     x=vc_group["line"],
@@ -2059,33 +2087,26 @@ def write_line_current_multi_html(
                 fig.add_trace(go.Bar(
                     x=vc_group["line"],
                     y=vc_group["estimated"],
-                    name="SE without constraints on af",
-                    offsetgroup="without_costraints_estimated",
-                    marker_color=colors["without_costraints_estimated"],
+                    name="SE unconstrained af",
+                    offsetgroup="unconstrained_af_estimation",
+                    marker_color=colors["unconstrained_af_estimation"],
                 ))
-
+            # Add the state-estimation result obtained with constraints.
             if not c_group.empty:
                 fig.add_trace(go.Bar(
                     x=c_group["line"],
                     y=c_group["estimated"],
-                    name="SE with constraints on af",
-                    offsetgroup="with_constraints_estimated",
-                    marker_color=colors["with_constraints_estimated"],
+                    name="SE constrained af",
+                    offsetgroup="constrained_af_estimation",
+                    marker_color=colors["constrained_af_estimation"],
                 ))
 
         else:
-            fig.add_trace(go.Bar(
-                x=group["line"],
-                y=group["powerflow"],
-                name="Powerflow",
-            ))
+            # Compare the power-flow and state-estimation results directly.
+            fig.add_trace(go.Bar(x=group["line"], y=group["powerflow"], name="Powerflow"))
+            fig.add_trace(go.Bar(x=group["line"], y=group["estimated"], name="Estimated"))
 
-            fig.add_trace(go.Bar(
-                x=group["line"],
-                y=group["estimated"],
-                name="Estimated",
-            ))
-
+        # Configure the appearance of the current iteration's chart.
         fig.update_layout(
             title=f"Iteration {iteration}",
             xaxis_title="Line",
@@ -2094,18 +2115,16 @@ def write_line_current_multi_html(
             height=450,
             legend_title="Daten",
         )
-
-        # fig.update_yaxes(range=[0.9, 1.05])
-
+        # Load Plotly only once in the first chart.
         html_parts.append(f"<h2>Iteration {iteration}</h2>")
         html_parts.append(
             pio.to_html(
                 fig,
                 full_html=False,
-                include_plotlyjs="cdn" if k == 0 else False
+                include_plotlyjs="cdn" if m == 0 else False  # include_plotlyjs=True (without internet possible)
             )
         )
-
+    # Complete and save the HTML document.
     html_parts.append("</body></html>")
 
     with open(save_html, "w", encoding="utf-8") as f:
@@ -2114,14 +2133,22 @@ def write_line_current_multi_html(
 
 
 def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> None:
-    # -------------------------------------------------------------------------
-    # Read in failures
-    # -------------------------------------------------------------------------
-    failure_set = load_failures(data_path, eval_path)
-    # -------------------------------------------------------------------------
-    # Read in bus and line data from pickle
-    # -------------------------------------------------------------------------
+    """
+    Evaluate bus voltages, bus active powers, and line currents.
 
+    Power-flow and state-estimation results are loaded for each solver and exported as interactive HTML visualizations.
+
+    Parameters:
+        data_path: Directory containing the simulation results.
+        eval_path: Directory in which the HTML files are saved.
+        with_wls: Whether to include the AF-WLS solver in the evaluation.
+
+    Returns: None
+    """
+    # Load solver/iteration pairs for failed simulations.
+    failure_set = load_failures(data_path, eval_path)
+
+    # Select the solvers and collect their result files.
     if with_wls:
         solver_ls = ["AF-WLS", "AF-WLAV", "AF-LAV"]
         af_wls_path = os.path.join(data_path, "af_wls")
@@ -2132,7 +2159,7 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
     af_wlav_files = collect_pickle_files(af_wlav_path, "af_wlav_")
     af_lav_path = os.path.join(data_path, "af_lav")
     af_lav_files = collect_pickle_files(af_lav_path, "af_lav_")
-
+    # Map each solver to its available pickle files.
     if with_wls:
         pkl_files_dc = {
             "AF-WLS": af_wls_files,
@@ -2144,13 +2171,13 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
             "AF-WLAV": af_wlav_files,
             "AF-LAV": af_lav_files
         }
-
+    # Store the comparison records for each solver.
     bus_voltage_records = {solver: [] for solver in solver_ls}
     bus_active_power_records = {solver: [] for solver in solver_ls}
     line_current_records = {solver: [] for solver in solver_ls}
-
+    # Collect all available simulation iterations across the selected solvers.
     all_iterations = sorted(set().union(*[files.keys() for files in pkl_files_dc.values()]))
-
+    # Load and evaluate every available solver/iteration combination.
     for i in tqdm(all_iterations):
         for solver in solver_ls:
             if (solver, i) in failure_set:
@@ -2161,7 +2188,7 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
                 continue
 
             net_ij = from_pickle(pkl_files_dc[solver][i])
-
+            # Ensure that the required bus result tables are available.
             if not hasattr(net_ij, "res_bus"):
                 print(f"missing res_bus: solver={solver}, iteration={i}")
                 continue
@@ -2169,9 +2196,9 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
             if not hasattr(net_ij, "res_bus_est"):
                 print(f"missing res_bus_est: solver={solver}, iteration={i}")
                 continue
-
+            # Calculate the base current for each line: I_base = S_base / (sqrt(3) * V_base).
             i_base = net_ij.sn_mva / (np.sqrt(3) * net_ij.bus.loc[net_ij.line["from_bus"], "vn_kv"].values)
-
+            # Store power-flow and estimated bus results.
             for bus_idx in net_ij.res_bus.index:
                 bus_voltage_records[solver].append({
                     "iteration": f"{i:03d}",
@@ -2179,12 +2206,14 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
                     "powerflow": float(net_ij.res_bus.loc[bus_idx, "vm_pu"]),
                     "estimated": float(net_ij.res_bus_est.loc[bus_idx, "vm_pu"])
                 })
+                # Normalize the active power using the network base power.
                 bus_active_power_records[solver].append({
                     "iteration": f"{i:03d}",
                     "bus": str(bus_idx),
                     "powerflow": float(net_ij.res_bus.loc[bus_idx, "p_mw"] / net_ij.sn_mva),
                     "estimated": float(net_ij.res_bus_est.loc[bus_idx, "p_mw"] / net_ij.sn_mva)
                 })
+            # Store normalized power-flow and estimated line currents.
             for line_idx in net_ij.res_line.index:
                 line_current_records[solver].append({
                     "iteration": f"{i:03d}",
@@ -2192,15 +2221,16 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
                     "powerflow": float(net_ij.res_line.loc[line_idx, "i_ka"] / i_base[line_idx]),
                     "estimated": float(net_ij.res_line_est.loc[line_idx, "i_ka"] / i_base[line_idx])
                 })
-
+    # Identify slack buses defined by external grids.
     slack_buses: list[int] = net_ij.ext_grid["bus"].astype(int).tolist()
-
+    # Include buses of generators configured as slack generators.
     if "slack" in net_ij.gen.columns:
         slack_buses.extend(
             net_ij.gen.loc[net_ij.gen["slack"].fillna(False).astype(bool), "bus"].astype(int).tolist()
         )
+    # Remove duplicate slack-bus indices and sort the result.
     slack_buses = sorted(set(slack_buses))
-
+    # Generate the evaluation plots for each solver.
     for solver in solver_ls:
         write_bus_voltage_multi_html(
             bus_voltage_records[solver],
@@ -2211,7 +2241,7 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
         write_bus_power_multi_html(
             bus_active_power_records[solver],
             eval_path,
-            f"bus_power_without_slack{solver}.html",
+            f"bus_power_without_slack_{solver}.html",
             f"Busleistung je Iteration - {solver}",
             True,
             False,
@@ -2225,9 +2255,15 @@ def evaluation_bus(data_path: str, eval_path: str, with_wls: bool = True) -> Non
         )
 
 
-def show_af_simbench():
+def show_af_simbench() -> None:
+    """
+    Display allocation-factor types for SimBench grids with up to 200 buses. Larger grids are skipped to keep the
+    output manageable.
+    """
+    # Retrieve all available SimBench grid codes.
     simbench_grid_ls = sb.collect_all_simbench_codes()
-    sb_grid_ls_3 = ["1-MV-semiurb--0-sw", "1-MV-urban--0-sw", "1-MV-comm--0-sw"]
+    # sb_grid_ls_3 = ["1-MV-semiurb--0-sw", "1-MV-urban--0-sw", "1-MV-comm--0-sw"]
+    # Load each grid and display its allocation-factor types.
     for simbench_grid in tqdm(simbench_grid_ls):
         net_simbench = sb.get_simbench_net(simbench_grid)
         if len(net_simbench.bus) <= 200:
@@ -2248,12 +2284,21 @@ def load_vc_af_not_in_failures(
         eval_path: str = "."
 ) -> set[tuple[str, int]]:
     """
-    Load entries from violation_constraints.txt that are not present in failures.txt.
+    Load successful simulations with violated allocation-factor constraints.
+
+    Entries from ``violation_constraints.txt`` are excluded if the same solver and iteration occur in either
+    ``failures.txt`` file. The remaining entries are saved to ``vc_af_not_in_failures.csv``.
+
+    Parameters:
+        data_vc_path: Directory containing unconstrained simulation results.
+        data_c_path: Directory containing constrained simulation results.
+        eval_path: Directory in which the output CSV file is saved.
 
     Returns:
-        Set of (solver, iteration) tuples that occur in violation_constraints.txt but not in failures.txt.
+        Successful ``(solver, iteration)`` pairs with constraint violations.
     """
-
+    # Load failures from simulations without allocation-factor constraints.
+    # All columns are initially read as strings to ensure predictable parsing.
     failures_vc = pd.read_csv(
         os.path.join(data_vc_path, "failures.txt"),
         header=None,
@@ -2261,8 +2306,10 @@ def load_vc_af_not_in_failures(
         skipinitialspace=True,
         dtype={"solver": str, "iteration": str, "status": str}
     )
+    # Convert the iteration identifier to an integer so that it can be matched
+    # against the iteration identifiers in the other input files.
     failures_vc["iteration"] = failures_vc["iteration"].astype(int)
-
+    # Load failures from simulations with constrained allocation factors.
     failures_c = pd.read_csv(
         os.path.join(data_c_path, "failures.txt"),
         header=None,
@@ -2271,7 +2318,8 @@ def load_vc_af_not_in_failures(
         dtype={"solver": str, "iteration": str, "status": str}
     )
     failures_c["iteration"] = failures_c["iteration"].astype(int)
-
+    # Load all solver/iteration pairs for which an allocation factor violated
+    # its permitted range in an unconstrained simulation.
     violation_constraints_af = pd.read_csv(
         os.path.join(data_vc_path, "violation_constraints.txt"),
         header=None,
@@ -2281,11 +2329,14 @@ def load_vc_af_not_in_failures(
     )
     violation_constraints_af["iteration"] = violation_constraints_af["iteration"].astype(int)
 
+    # Convert the DataFrame rows into sets of (solver, iteration) tuples.
+    # Sets allow duplicate entries to be removed automatically and support
+    # efficient difference operations.
     failures_vc_set = set(zip(failures_vc["solver"], failures_vc["iteration"]))
     failures_c_set = set(zip(failures_c["solver"], failures_c["iteration"]))
 
     vc_af_set = set(zip(violation_constraints_af["solver"], violation_constraints_af["iteration"]))
-
+    # Keep only violations for which both the constrained and unconstrained simulations completed successfully.
     result_set = vc_af_set - failures_vc_set - failures_c_set
 
     result_df = pd.DataFrame(
@@ -2305,19 +2356,66 @@ def load_vc_af_not_in_failures(
 def eval_vc_af(
         d_c_path: str,
         d_vc_path: str,
-        e_c_path: str,
         e_vc_path: str
 ) -> None:
     r"""
-    Evaluation of simulations with and without constraints for allocation factors
+    Compare simulation results obtained with constrained and unconstrained allocation factors.
+
+    The constrained simulations enforce the following bounds on the allocation factor :math:`\alpha`:
+
+    .. math::
+
+        0 \leq \alpha \leq 1
+
+    In the unconstrained simulations, the allocation factor may violate these bounds, i.e. :math:`\alpha < 0` or
+    :math:`\alpha > 1`.
+
+    Only successfully completed simulation iterations for which an allocation factor violates the constraints are
+    evaluated. For each such iteration, the function compares power-flow and state-estimation results for:
+
+        * bus voltage magnitudes,
+        * normalized bus active powers, and
+        * normalized line currents.
+
+    The comparison is performed separately for the ``AF-WLAV`` and ``AF-LAV`` solvers. The resulting interactive HTML
+    visualizations are written to the ``constraints_combined`` subdirectory of ``e_vc_path``.
+
+    Bus active powers are normalized using the network base power ``net_ij.sn_mva``. Line currents are converted to
+    per-unit values using the base current
+
+    .. math::
+
+        I_\mathrm{base} =
+        \frac{S_\mathrm{base}}
+        {\sqrt{3}\,V_\mathrm{base}}.
+
+    Missing files, result tables, and unsupported solver names are reported to standard output and skipped.
+
+    Parameters:
+        d_c_path:
+            Path to the simulation results generated with constrained allocation factors,
+            where 0 <= :math:`\alpha` <= 1.
+        d_vc_path:
+            Path to the simulation results generated without allocation-factor constraints, where values such as
+            1 < :math:`\alpha` and :math:`\alpha` < 0 are permitted.
+        e_vc_path: Output directory in which the evaluated results and generated HTML visualizations are stored.
+
+
+    Returns: None
     """
+    # Identify successfully completed unconstrained simulations in which at
+    # least one allocation factor violates the interval 0 <= alpha <= 1.
+    # violated constraints (vc) constraints (c)
     vc_af_set = load_vc_af_not_in_failures(d_vc_path, d_c_path, e_vc_path)
 
+    # State-estimation solvers included in the comparison.
     solver_ls = ["AF-WLAV", "AF-LAV"]
 
+    # Collect unconstrained AF-WLAV result files and map each simulation
+    # iteration to its corresponding pickle file.
     af_vc_wlav_path = os.path.join(d_vc_path, "af_wlav")
     af_vc_wlav_files = collect_pickle_files(af_vc_wlav_path, "af_wlav_")
-
+    # Collect unconstrained AF-LAV result files.
     af_vc_lav_path = os.path.join(d_vc_path, "af_lav")
     af_vc_lav_files = collect_pickle_files(af_vc_lav_path, "af_lav_")
 
@@ -2326,6 +2424,7 @@ def eval_vc_af(
         "AF-LAV": af_vc_lav_files,
     }
 
+    # Collect result files from simulations with constrained allocation factors.
     af_c_wlav_path = os.path.join(d_c_path, "af_wlav")
     af_c_wlav_files = collect_pickle_files(af_c_wlav_path, "af_wlav_")
     af_c_lav_path = os.path.join(d_c_path, "af_lav")
@@ -2336,66 +2435,71 @@ def eval_vc_af(
         "AF-LAV": af_c_lav_files,
     }
 
+    # Store bus-voltage comparison data for every case and solver.
     bus_voltage_records = {
-        "without constraints": {solver: [] for solver in solver_ls},
-        "with constraints": {solver: [] for solver in solver_ls},
+        "unconstrained": {solver: [] for solver in solver_ls},
+        "constrained": {solver: [] for solver in solver_ls},
     }
-
+    # Store normalized bus active-power comparison data.
     bus_active_power_records = {
-        "without constraints": {solver: [] for solver in solver_ls},
-        "with constraints": {solver: [] for solver in solver_ls},
+        "unconstrained": {solver: [] for solver in solver_ls},
+        "constrained": {solver: [] for solver in solver_ls},
     }
-
+    # Store normalized line-current comparison data.
     line_current_records = {
-        "without constraints": {solver: [] for solver in solver_ls},
-        "with constraints": {solver: [] for solver in solver_ls},
+        "unconstrained": {solver: [] for solver in solver_ls},
+        "constrained": {solver: [] for solver in solver_ls},
     }
-
+    # Associate each comparison case with its available pickle files.
     pkl_files_by_case = {
-        "without constraints": pkl_files_vc_dc,
-        "with constraints": pkl_files_c_dc,
+        "unconstrained": pkl_files_vc_dc,
+        "constrained": pkl_files_c_dc,
     }
-
+    # Process each solver/iteration pair in a reproducible order.
     for solver, i in tqdm(sorted(vc_af_set, key=lambda x: (x[0], x[1]))):
 
         if solver not in solver_ls:
             print(f"unknown solver: solver={solver}, iteration={i:03d}")
             continue
-
+        # Evaluate the same iteration both with and without allocation-factor constraints.
         for case_name, pkl_files_dc in pkl_files_by_case.items():
 
             if i not in pkl_files_dc[solver]:
                 print(f"missing pickle: case={case_name}, solver={solver}, iteration={i:03d}")
                 continue
-
+            # Load the pandapower network and its result tables.
             net_ij = from_pickle(pkl_files_dc[solver][i])
-
+            # Power-flow bus results are required for the comparison.
             if not hasattr(net_ij, "res_bus"):
                 print(f"missing res_bus: case={case_name}, solver={solver}, iteration={i:03d}")
                 continue
-
+            # Estimated bus results are required for the comparison.
             if not hasattr(net_ij, "res_bus_est"):
                 print(f"missing res_bus_est: case={case_name}, solver={solver}, iteration={i:03d}")
                 continue
-
+            # Power-flow line results are required for the comparison.
             if not hasattr(net_ij, "res_line"):
                 print(f"missing res_line: case={case_name}, solver={solver}, iteration={i:03d}")
                 continue
-
+            # Estimated line results are required for the comparison.
             if not hasattr(net_ij, "res_line_est"):
                 print(f"missing res_line_est: case={case_name}, solver={solver}, iteration={i:03d}")
                 continue
 
+            # Calculate the base current of every line:
+            #     I_base = S_base / (sqrt(3) * V_base)
+            # sn_mva and vn_kv yield a base current in kA. This value is later
+            # used to convert the line currents to per-unit values.
             i_base = pd.Series(
                 net_ij.sn_mva / (np.sqrt(3) * net_ij.bus.loc[net_ij.line["from_bus"], "vn_kv"].values),
                 index=net_ij.line.index
             )
-
+            # Bus values can only be compared if both result tables use the same bus indices.
             for bus_idx in net_ij.res_bus.index:
                 if not net_ij.res_bus.index.equals(net_ij.res_bus_est.index):
                     print(f"bus index mismatch: case={case_name}, solver={solver}, iteration={i:03d}")
                     continue
-
+                # Store the voltage magnitude from the power flow and the corresponding state-estimation result.
                 bus_voltage_records[case_name][solver].append({
                     "iteration": f"{i:03d}",
                     "bus": str(bus_idx),
@@ -2403,7 +2507,7 @@ def eval_vc_af(
                     "powerflow": float(net_ij.res_bus.loc[bus_idx, "vm_pu"]),
                     "estimated": float(net_ij.res_bus_est.loc[bus_idx, "vm_pu"]),
                 })
-
+                # Normalize active power by the network base power so that values are represented in per unit.
                 bus_active_power_records[case_name][solver].append({
                     "iteration": f"{i:03d}",
                     "bus": str(bus_idx),
@@ -2411,11 +2515,13 @@ def eval_vc_af(
                     "powerflow": float(net_ij.res_bus.loc[bus_idx, "p_mw"] / net_ij.sn_mva),
                     "estimated": float(net_ij.res_bus_est.loc[bus_idx, "p_mw"] / net_ij.sn_mva),
                 })
-
+            # Line values can only be compared if the power-flow and estimation result tables use identical line
+            # indices.
             for line_idx in net_ij.res_line.index:
                 if not net_ij.res_line.index.equals(net_ij.res_line_est.index):
                     print(f"line index mismatch: case={case_name}, solver={solver}, iteration={i:03d}")
                     continue
+                # Divide the line currents by the corresponding base current to obtain per-unit values.
                 line_current_records[case_name][solver].append({
                     "iteration": f"{i:03d}",
                     "line": str(line_idx),
@@ -2427,51 +2533,53 @@ def eval_vc_af(
                         net_ij.res_line_est.loc[line_idx, "i_ka"] / i_base[line_idx]
                     ),
                 })
-
+    # Determine all slack buses. They may be defined either by an external grid or by generators whose "slack" flag is
+    # enabled.
     slack_buses: list[int] = net_ij.ext_grid["bus"].astype(int).tolist()
     if "slack" in net_ij.gen.columns:
         slack_buses.extend(
             net_ij.gen.loc[net_ij.gen["slack"].fillna(False).astype(bool), "bus"].astype(int).tolist()
         )
+    # Remove duplicate bus indices and provide deterministic ordering.
     slack_buses = sorted(set(slack_buses))
-
+    # Prepare combined records so that constrained and unconstrained results can be displayed in the same visualization.
     combined_bus_voltage_records = {solver: [] for solver in solver_ls}
     combined_bus_active_power_records = {solver: [] for solver in solver_ls}
     combined_line_current_records = {solver: [] for solver in solver_ls}
 
     for solver in solver_ls:
         combined_bus_voltage_records[solver] = (
-                bus_voltage_records["without constraints"][solver]
-                + bus_voltage_records["with constraints"][solver]
+                bus_voltage_records["unconstrained"][solver]
+                + bus_voltage_records["constrained"][solver]
         )
 
         combined_bus_active_power_records[solver] = (
-                bus_active_power_records["without constraints"][solver]
-                + bus_active_power_records["with constraints"][solver]
+                bus_active_power_records["unconstrained"][solver]
+                + bus_active_power_records["constrained"][solver]
         )
 
         combined_line_current_records[solver] = (
-                line_current_records["without constraints"][solver]
-                + line_current_records["with constraints"][solver]
+                line_current_records["unconstrained"][solver]
+                + line_current_records["constrained"][solver]
         )
-
+    # Create the output directory for the combined comparison plots.
     eval_path = os.path.join(e_vc_path, "constraints_combined")
     os.makedirs(eval_path, exist_ok=True)
-
+    # Generate one set of interactive HTML visualizations per solver.
     for solver in solver_ls:
         write_bus_voltage_multi_html(
             combined_bus_voltage_records[solver],
             eval_path,
-            f"bus_voltages_constraints_{solver}.html",
-            f"Busspannungen je Iteration - with/without constraints - {solver}",
+            f"bus_voltages_unconstrained_af_{solver}.html",
+            f"bus voltages per iteration - un/constrained af - {solver}",
             vc_af_bool=True
         )
 
         write_bus_power_multi_html(
             combined_bus_active_power_records[solver],
             eval_path,
-            f"bus_power_without_slack_constraints_{solver}.html",
-            f"Busleistung je Iteration - with/without constraints - {solver}",
+            f"bus_power_without_slack_unconstrained_af_{solver}.html",
+            f"bus active power per iteration - un/constrained af - {solver}",
             hide_s_bus=True,
             vc_af_bool=True,
             slack_buses=slack_buses
@@ -2480,17 +2588,21 @@ def eval_vc_af(
         write_line_current_multi_html(
             combined_line_current_records[solver],
             eval_path,
-            f"line_current_constraints_{solver}.html",
-            f"Leitungsstrom je Iteration - with/without constraints - {solver}",
+            f"line_current_unconstrained_af_{solver}.html",
+            f"line current per iteration - un/constrained af - {solver}",
             vc_af_bool=True
         )
 
 
 def _get_allocation_factor_names(net: pandapowerNet) -> tuple[list[str], int]:
     """
-    Determine allocation-factor clusters from the element type columns.
+    Determine allocation-factor clusters from the element type columns. Loads and static generators with missing or
+    empty types are ignored.
 
-    Loads and static generators with missing or empty types are ignored.
+    Parameters:
+        net: power net with different clusters.
+
+    Returns: A Tuple with a list with all existing clusters and the number of different clusters.
     """
     cluster_names: set[str] = set()
 
@@ -2506,6 +2618,32 @@ def _get_allocation_factor_names(net: pandapowerNet) -> tuple[list[str], int]:
     number_af = len(net.load["type"].unique()) + len(net.gen["type"].unique()) + len(net.sgen["type"].unique())
     print(f"number of allocation factors: {number_af}")
     return sorted(cluster_names), number_af
+
+
+def _drop_not_used_measurement_se(net: pandapowerNet) -> None:
+    """
+    Remove current measurements and bus active/reactive power measurements for state estimation. The measurement table
+    of ``net`` is modified in place. Reason state estimation can work better without these measurements?
+
+    Parameters:
+        net: power net with different measurements.
+
+    Returns: None
+    """
+    measurements = net.measurement
+
+    # Select all current measurements.
+    current_mask = measurements["measurement_type"].eq("i")
+
+    # Select active and reactive power measurements assigned to buses.
+    bus_power_mask = (measurements["measurement_type"].isin(["p", "q"]) & measurements["element_type"].eq("bus"))
+
+    # Remove the selected measurements and rebuild the row index.
+    measurements.drop(
+        index=measurements.index[current_mask | bus_power_mask],
+        inplace=True
+    )
+    measurements.reset_index(drop=True, inplace=True)
 
 
 if __name__ == "__main__":
@@ -2541,9 +2679,9 @@ if __name__ == "__main__":
         "Hydro_MV": (0.6, 1.0),
         "PV_MV": (0.2, 1.0),
         "Wind_MV": (0.3, 1.0),
-        "commercial": (0.5, 0.9),
+        "commercial": (0.3, 0.6),
         "lv_RES": (0.3, 0.8),
-        "residential": (0.3, 0.9),
+        "residential": (0.5, 0.8),
     }
 
     parameters = {
@@ -2628,7 +2766,6 @@ if __name__ == "__main__":
         eval_vc_af(
             os.path.join(str(os.getenv("PATH_DATA_18BUS")), constraints_dir),
             os.path.join(str(os.getenv("PATH_DATA_18BUS")), vc_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_18BUS")), constraints_dir),
             os.path.join(str(os.getenv("PATH_EVAL_18BUS")), vc_dir)
         )
 
@@ -2691,21 +2828,7 @@ if __name__ == "__main__":
         # deactivate_sgen_by_type(net_sb, "Biomass_MV")  # wls get problems with in_service = False ToDo: check this
         # net_elements_ls = get_non_empty_table_names(net_sb)
 
-        # delete i measurements and p/q measurements by buses
-        net_sb.measurement.drop(
-            index=net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("i")], inplace=True
-        )
-        net_sb.measurement.drop(
-            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("p") &
-                                            net_sb.measurement["element_type"].eq("bus")]),
-            inplace=True
-        )
-        net_sb.measurement.drop(
-            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("q") &
-                                            net_sb.measurement["element_type"].eq("bus")]),
-            inplace=True
-        )
-        net_sb.measurement.reset_index(drop=True, inplace=True)
+        _drop_not_used_measurement_se(net_sb)
 
         # create new clusters for allocation factors
         p_loads = net_sb.load["p_mw"].abs()
@@ -2781,7 +2904,6 @@ if __name__ == "__main__":
         eval_vc_af(
             os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, constraints_dir),
             os.path.join(str(os.getenv("PATH_DATA_SB")), sb_grid_name, vc_dir),
-            os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, constraints_dir),
             os.path.join(str(os.getenv("PATH_EVAL_SB")), sb_grid_name, vc_dir)
         )
 
@@ -2857,21 +2979,7 @@ if __name__ == "__main__":
         if missing_scaling:
             raise ValueError(f"Missing scaling ranges for: {missing_scaling}")
 
-        # delete i measurements and p/q measurements by buses ToDo: create function to drop measurements
-        net_sb.measurement.drop(
-            index=net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("i")], inplace=True
-        )
-        net_sb.measurement.drop(
-            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("p") &
-                                            net_sb.measurement["element_type"].eq("bus")]),
-            inplace=True
-        )
-        net_sb.measurement.drop(
-            index=(net_sb.measurement.index[net_sb.measurement["measurement_type"].eq("q") &
-                                            net_sb.measurement["element_type"].eq("bus")]),
-            inplace=True
-        )
-        net_sb.measurement.reset_index(drop=True, inplace=True)
+        _drop_not_used_measurement_se(net_sb)
 
         np.random.seed(112)
         k = _create_simbench_mc_case(net_sb, None, scaling_ranges=scaling_ranges_dc)
